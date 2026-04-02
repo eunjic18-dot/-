@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "Card": {
+      "title": "Card",
+      "description": "A collectible card in Love & Deepspace",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the card" },
+        "imageUrls": { "type": "array", "items": { "type": "string" }, "description": "URLs of the card images" },
+        "gachaPeriod": { "type": "string", "description": "Gacha availability period" },
+        "gachaStartDate": { "type": "string" },
+        "gachaEndDate": { "type": "string" },
+        "rerunStartDate": { "type": "string" },
+        "rerunEndDate": { "type": "string" },
+        "pvUrl": { "type": "string" },
+        "pvUrl2": { "type": "string" },
+        "memoryIntroUrl": { "type": "string" },
+        "memoryIntroUrl2": { "type": "string" },
+        "linkedCardId": { "type": "string", "description": "ID of a linked card for shared reviews" },
+        "attribute": { "type": "string", "enum": ["공격", "방어", "체력"], "description": "Card attribute" },
+        "color": { "type": "string", "enum": ["레드", "블루", "골드", "그린", "퍼플", "핑크", "빨강", "파랑", "노랑", "초록", "보라", "분홍"], "description": "Card color" },
+        "type": { "type": "string", "enum": ["단독", "단체", "배포", "상시"], "description": "Card type (Solo, Group, Distribution, or Permanent)" },
+        "category": { "type": "string", "enum": ["백야", "월광"], "description": "Card category" },
+        "character": { "type": "string", "enum": ["심성훈", "이서언", "기욱", "진운", "하우주"], "description": "Character name" },
+        "releaseDate": { "type": "string", "description": "Release date for sorting" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["name", "imageUrls", "attribute", "color", "type", "category", "character"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "A user's review of a specific card",
+      "type": "object",
+      "properties": {
+        "cardId": { "type": "string", "description": "ID of the reviewed card" },
+        "content": { "type": "string", "description": "Review text content" },
+        "mediaUrls": { "type": "array", "items": { "type": "string" }, "description": "URLs of attached images/videos" },
+        "nickname": { "type": "string", "description": "User's chosen nickname" },
+        "password": { "type": "string", "description": "Password for deletion" },
+        "ip": { "type": "string", "description": "User's IP address" },
+        "isSpoiler": { "type": "boolean", "description": "Whether the review contains spoilers" },
+        "ratings": {
+          "type": "object",
+          "properties": {
+            "overall": { "type": "number" },
+            "story": { "type": "number" },
+            "visuals": { "type": "number" }
+          }
+        },
+        "likes": { "type": "number" },
+        "likedBy": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["cardId", "content", "nickname"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment on a review",
+      "type": "object",
+      "properties": {
+        "reviewId": { "type": "string", "description": "ID of the parent review" },
+        "content": { "type": "string", "description": "Comment text content" },
+        "nickname": { "type": "string", "description": "User's chosen nickname" },
+        "password": { "type": "string", "description": "Password for deletion" },
+        "mediaUrls": { "type": "array", "items": { "type": "string" } },
+        "ip": { "type": "string" },
+        "isSpoiler": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["reviewId", "content", "nickname"]
+    },
+    "Stats": {
+      "title": "Stats",
+      "description": "Application statistics",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "description": "Date in YYYY-MM-DD format" },
+        "visits": { "type": "number", "description": "Number of visits" },
+        "paths": { "type": "object", "description": "Path visit counts" }
+      }
+    }
+  },
+  "firestore": {
+    "/cards/{cardId}": { "schema": "Card", "description": "Collection of cards" },
+    "/reviews/{reviewId}": { "schema": "Review", "description": "Collection of reviews" },
+    "/comments/{commentId}": { "schema": "Comment", "description": "Collection of comments" },
+    "/stats/{statId}": { "schema": "Stats", "description": "Collection of stats" }
+  }
+}
