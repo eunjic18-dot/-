@@ -2363,13 +2363,13 @@ export default function App() {
                 </div>
 
                 <div className="space-y-8">
-                  <div className="flex items-center justify-between mb-8">
-                    <h2 className="text-2xl font-black text-gray-900 flex items-center gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+                    <h2 className="text-2xl font-black text-gray-900 flex items-center gap-3 shrink-0">
                       <MessageSquare className={cn("w-7 h-7", currentAccent)} />
                       감상평
                       <span className="text-sm font-bold text-gray-400 ml-1">{reviews.length}</span>
                     </h2>
-                    <div className="flex items-center gap-2 bg-gray-100/50 p-1 rounded-xl">
+                    <div className="flex items-center gap-1 sm:gap-2 bg-gray-100/50 p-1 rounded-xl overflow-x-auto hide-scrollbar">
                       {[
                         { id: 'latest', label: '최신순' },
                         { id: 'oldest', label: '오래된순' },
@@ -2380,7 +2380,7 @@ export default function App() {
                           key={sort.id}
                           onClick={() => setReviewSortBy(sort.id as any)}
                           className={cn(
-                            "px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all",
+                            "px-2.5 sm:px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap shrink-0",
                             reviewSortBy === sort.id 
                               ? "bg-white text-gray-900 shadow-sm" 
                               : "text-gray-400 hover:text-gray-600"
