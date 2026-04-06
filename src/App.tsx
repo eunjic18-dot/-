@@ -488,7 +488,7 @@ export default function App() {
       directing: 0
     }
   });
-  const [reviewSortBy, setReviewSortBy] = useState<'latest' | 'likes' | 'comments'>('latest');
+  const [reviewSortBy, setReviewSortBy] = useState<'latest' | 'oldest' | 'likes' | 'comments'>('latest');
   const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
   const [editReviewForm, setEditReviewForm] = useState<any>(null);
   const [uploadingReviewImage, setUploadingReviewImage] = useState(false);
@@ -735,6 +735,7 @@ export default function App() {
     return [...reviews].sort((a, b) => {
       if (reviewSortBy === 'likes') return (b.likes || 0) - (a.likes || 0);
       if (reviewSortBy === 'comments') return (b.commentCount || 0) - (a.commentCount || 0);
+      if (reviewSortBy === 'oldest') return (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0);
       return (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0);
     });
   }, [reviews, reviewSortBy]);
@@ -758,12 +759,14 @@ export default function App() {
         const totalReviews = validReviews.length;
         const todayComments = allComments.filter(c => c.createdAt && c.createdAt.toDate() >= today && cards.some(card => card.id === c.cardId)).length;
 
+        const stripHtml = (html: string) => html.replace(/<[^>]*>?/gm, '');
+
         // Top 5 Best Reviews (by likes)
         const bestReviews = [...validReviews]
           .sort((a, b) => (b.likes || 0) - (a.likes || 0))
           .slice(0, 5)
           .map(r => ({
-            content: r.content.substring(0, 20) + '...',
+            content: stripHtml(r.content).substring(0, 20) + '...',
             author: r.nickname,
             cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
             cardId: r.cardId
@@ -774,7 +777,7 @@ export default function App() {
           .sort((a, b) => (b.commentCount || 0) - (a.commentCount || 0))
           .slice(0, 5)
           .map(r => ({
-            content: r.content.substring(0, 20) + '...',
+            content: stripHtml(r.content).substring(0, 20) + '...',
             author: r.nickname,
             cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
             cardId: r.cardId
@@ -820,7 +823,7 @@ export default function App() {
             if (cardReviews.length > 0) {
               charData.cards.push({ name: card.name, avg, count: cardReviews.length, maxLikes, cardId: card.id });
               cardReviews.forEach(r => {
-                const words = r.content.replace(/[^\w\s가-힣]/g, '').split(/\s+/);
+                const words = stripHtml(r.content).replace(/[^\w\s가-힣]/g, '').split(/\s+/);
                 charData.words.push(...words);
               });
             }
@@ -2369,6 +2372,7 @@ export default function App() {
                     <div className="flex items-center gap-2 bg-gray-100/50 p-1 rounded-xl">
                       {[
                         { id: 'latest', label: '최신순' },
+                        { id: 'oldest', label: '오래된순' },
                         { id: 'likes', label: '좋아요순' },
                         { id: 'comments', label: '댓글순' }
                       ].map((sort) => (
@@ -2875,11 +2879,11 @@ export default function App() {
               <div className="p-6 sm:p-8 overflow-y-auto custom-scrollbar">
                 <div className="bg-rose-50 border border-rose-100 rounded-2xl p-5 mb-6">
                   <p className="text-sm text-rose-800 leading-relaxed font-medium">
-                    본 서비스는 비영리 목적으로 운영되는 개인 아카이빙 공간입니다.
+                    본 서비스는 비영리 목적으로 운영되는 아카이빙 공간입니다.
                     <br /><br />
-                    보내주시는 의견은 서비스 품질 향상에 소중한 밑거름이 됩니다. 다만, 운영 환경의 제약으로 인해 모든 건의사항을 즉각적으로 검토하거나 반영하기 어려운 점 양해 부탁드립니다.
+                    보내주시는 의견은 사이트 개선에 소중한 밑거름이 됩니다. 다만, 운영 환경의 제약으로 인해 모든 건의사항을 즉각적으로 검토하거나 반영하기 어려운 점 양해 부탁드립니다.
                     <br /><br />
-                    무분별한 비방, 욕설, 도배 등 운영 취지에 어긋나는 부적절한 게시물은 엄격히 금지되며, 발견 시 사전 고지 없이 삭제 및 이용 제한 조치가 취해질 수 있습니다. 성숙한 피드백 문화를 위해 협조 부탁드립니다.
+                    무분별한 비방, 욕설, 도배 등 운영 취지에 어긋나는 부적절한 게시물은 엄격히 금지되며, 발견 시 사전 고지 없이 이용 제한 조치가 취해질 수 있습니다. 성숙한 피드백 문화를 위해 협조 부탁드립니다.
                   </p>
                 </div>
 
@@ -3075,7 +3079,7 @@ export default function App() {
                       const card = cards.find(c => c.name === r.cardName);
                       return (
                         <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.split('\n')[0]}</p>
+                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.replace(/<[^>]*>?/gm, '').split('\n')[0]}</p>
                           <button 
                             onClick={() => {
                               if (card) {
@@ -3109,7 +3113,7 @@ export default function App() {
                       const card = cards.find(c => c.name === r.cardName);
                       return (
                         <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.split('\n')[0]}</p>
+                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.replace(/<[^>]*>?/gm, '').split('\n')[0]}</p>
                           <button 
                             onClick={() => {
                               if (card) {
@@ -3254,9 +3258,9 @@ export default function App() {
                         </p>
                         <div className="space-y-3">
                           {adminStats.bestReviews.length > 0 ? adminStats.bestReviews.map((r, i) => (
-                            <div key={i} className="text-base leading-relaxed">
-                              <p className="font-bold text-amber-900 truncate">{r.content}</p>
-                              <p className="text-amber-600/70 flex justify-between">
+                            <div key={i} className="text-sm leading-relaxed">
+                              <p className="font-medium text-amber-900 truncate">{r.content}</p>
+                              <p className="text-amber-600/70 flex justify-between text-xs mt-1">
                                 <span>{r.author}</span>
                                 <span 
                                   className="truncate ml-2 italic cursor-pointer hover:underline"
@@ -3281,9 +3285,9 @@ export default function App() {
                         </p>
                         <div className="space-y-3">
                           {adminStats.hotReviews.length > 0 ? adminStats.hotReviews.map((r, i) => (
-                            <div key={i} className="text-base leading-relaxed">
-                              <p className="font-bold text-rose-900 truncate">{r.content}</p>
-                              <p className="text-rose-600/70 flex justify-between">
+                            <div key={i} className="text-sm leading-relaxed">
+                              <p className="font-medium text-rose-900 truncate">{r.content}</p>
+                              <p className="text-rose-600/70 flex justify-between text-xs mt-1">
                                 <span>{r.author}</span>
                                 <span 
                                   className="truncate ml-2 italic cursor-pointer hover:underline"
@@ -3308,9 +3312,9 @@ export default function App() {
                         </p>
                         <div className="space-y-3">
                           {adminStats.mostLovedCards.length > 0 ? adminStats.mostLovedCards.map((c, i) => (
-                            <div key={i} className="flex items-center justify-between text-base">
+                            <div key={i} className="flex items-center justify-between text-sm">
                               <span 
-                                className="font-bold text-purple-900 truncate mr-2 cursor-pointer hover:underline"
+                                className="font-medium text-purple-900 truncate mr-2 cursor-pointer hover:underline"
                                 onClick={() => {
                                   const card = cards.find(card => card.id === c.cardId);
                                   if (card) {
@@ -3461,8 +3465,25 @@ export default function App() {
                         {suggestions.sort((a, b) => (b.createdAt?.toMillis() || Date.now()) - (a.createdAt?.toMillis() || Date.now())).map((suggestion) => (
                           <div key={suggestion.id} className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm relative group">
                             <div className="flex justify-between items-start mb-4">
-                              <div className="text-xs text-gray-400 font-medium">
-                                {suggestion.createdAt ? suggestion.createdAt.toDate().toLocaleString() : '방금 전'}
+                              <div className="flex items-center gap-3">
+                                <div className="text-xs text-gray-400 font-medium">
+                                  {suggestion.createdAt ? suggestion.createdAt.toDate().toLocaleString() : '방금 전'}
+                                </div>
+                                {suggestion.ip && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">IP: {suggestion.ip}</span>
+                                    {!bannedIps.includes(suggestion.ip) ? (
+                                      <button
+                                        onClick={() => handleBanIp(suggestion.ip)}
+                                        className="text-[10px] font-bold text-red-500 hover:underline"
+                                      >
+                                        차단
+                                      </button>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-red-500">차단됨</span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                               <button
                                 onClick={() => handleDeleteSuggestion(suggestion.id)}
@@ -4172,6 +4193,7 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
   const [isRevealed, setIsRevealed] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [commentsPage, setCommentsPage] = useState(1);
+  const [commentSortBy, setCommentSortBy] = useState<'newest' | 'oldest'>('newest');
   const COMMENTS_PER_PAGE = 10;
 
   const getNickname = () => {
@@ -4667,10 +4689,29 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
 
             {comments.length > 0 ? (
               <div className="p-6 sm:p-8 space-y-8 max-h-[800px] overflow-y-auto custom-scrollbar">
+                <div className="flex justify-end gap-2 text-xs font-medium text-gray-500 mb-4">
+                  <button 
+                    onClick={() => setCommentSortBy('newest')}
+                    className={cn("transition-colors", commentSortBy === 'newest' ? "text-gray-900 font-bold" : "hover:text-gray-700")}
+                  >
+                    최신순
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button 
+                    onClick={() => setCommentSortBy('oldest')}
+                    className={cn("transition-colors", commentSortBy === 'oldest' ? "text-gray-900 font-bold" : "hover:text-gray-700")}
+                  >
+                    오래된순
+                  </button>
+                </div>
                 {(() => {
                   const topLevelComments = comments
                     .filter(c => !c.parentId)
-                    .sort((a, b) => (a.createdAt?.toMillis() || Date.now()) - (b.createdAt?.toMillis() || Date.now())); // Oldest first, handle nulls as newest
+                    .sort((a, b) => {
+                      const timeA = a.createdAt?.toMillis() || Date.now();
+                      const timeB = b.createdAt?.toMillis() || Date.now();
+                      return commentSortBy === 'newest' ? timeB - timeA : timeA - timeB;
+                    });
                   
                   const totalPages = Math.ceil(topLevelComments.length / COMMENTS_PER_PAGE);
                   const paginatedTopLevel = topLevelComments.slice((commentsPage - 1) * COMMENTS_PER_PAGE, commentsPage * COMMENTS_PER_PAGE);
@@ -4678,7 +4719,7 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
                   const getDescendants = (parentId: string): Comment[] => {
                     return comments
                       .filter(c => c.parentId === parentId)
-                      .sort((a, b) => (a.createdAt?.toMillis() || Date.now()) - (b.createdAt?.toMillis() || Date.now())) // Oldest first, handle nulls as newest
+                      .sort((a, b) => (a.createdAt?.toMillis() || Date.now()) - (b.createdAt?.toMillis() || Date.now())) // Replies are always oldest first
                       .flatMap(c => [c, ...getDescendants(c.id)]);
                   };
 
