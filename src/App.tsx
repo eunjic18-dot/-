@@ -480,6 +480,7 @@ export default function App() {
     nickname: '',
     password: '',
     mediaUrls: [] as string[],
+    mediaSizes: [] as number[],
     mediaUrlInput: '',
     isSpoiler: false,
     ratings: {
@@ -1015,21 +1016,47 @@ export default function App() {
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
     
+    const currentTotalSize = reviewForm.mediaSizes.reduce((a, b) => a + b, 0);
+    let newTotalSize = currentTotalSize;
+    const validFiles: File[] = [];
+
+    for (const file of files) {
+      const isVideo = file.type.startsWith('video/');
+      const limit = isVideo ? 5 : 3;
+      if (file.size > limit * 1024 * 1024) {
+        await customAlert(`'${file.name}' 파일 크기가 너무 큽니다.\n(이미지 최대 3MB, 영상 최대 5MB)`);
+        if (e.target) e.target.value = '';
+        return;
+      }
+      if (newTotalSize + file.size > 20 * 1024 * 1024) {
+        await customAlert(`한 감상평 당 총 첨부파일 용량은 20MB를 초과할 수 없습니다.`);
+        if (e.target) e.target.value = '';
+        return;
+      }
+      newTotalSize += file.size;
+      validFiles.push(file);
+    }
+
+    if (validFiles.length === 0) return;
+
     setUploadingReviewImage(true);
     setUploadProgress(0);
     
     try {
-      const uploadPromises = files.map(async (file) => {
-        const isVideo = file.type.startsWith('video/');
-        const limit = isVideo ? 100 : 10;
-        if (file.size > limit * 1024 * 1024) {
-          throw new Error(`${file.name}은(는) 너무 큽니다 (최대 ${limit}MB)`);
-        }
-        return uploadMedia(file, 'review', setUploadProgress);
+      const uploadPromises = validFiles.map(async (file) => {
+        const url = await uploadMedia(file, 'review', setUploadProgress);
+        return { url, size: file.size };
       });
       
-      const urls = await Promise.all(uploadPromises);
-      setReviewForm(prev => ({ ...prev, mediaUrls: [...prev.mediaUrls, ...urls] }));
+      const results = await Promise.all(uploadPromises);
+      const urls = results.map(r => r.url);
+      const sizes = results.map(r => r.size);
+
+      setReviewForm(prev => ({ 
+        ...prev, 
+        mediaUrls: [...prev.mediaUrls, ...urls],
+        mediaSizes: [...prev.mediaSizes, ...sizes]
+      }));
     } catch (error: any) {
       console.error("Error uploading images:", error);
       await customAlert(`이미지 업로드에 실패했습니다: ${error.message}\n\n[해결 방법]\nFirebase Storage 요금제 문제일 수 있습니다. .env 파일에 VITE_CLOUDINARY_CLOUD_NAME과 VITE_CLOUDINARY_UPLOAD_PRESET을 설정하여 무료로 미디어를 업로드하세요.`);
@@ -1044,21 +1071,47 @@ export default function App() {
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
     
+    const currentTotalSize = (editReviewForm.mediaSizes || []).reduce((a: number, b: number) => a + b, 0);
+    let newTotalSize = currentTotalSize;
+    const validFiles: File[] = [];
+
+    for (const file of files) {
+      const isVideo = file.type.startsWith('video/');
+      const limit = isVideo ? 5 : 3;
+      if (file.size > limit * 1024 * 1024) {
+        await customAlert(`'${file.name}' 파일 크기가 너무 큽니다.\n(이미지 최대 3MB, 영상 최대 5MB)`);
+        if (e.target) e.target.value = '';
+        return;
+      }
+      if (newTotalSize + file.size > 20 * 1024 * 1024) {
+        await customAlert(`한 감상평 당 총 첨부파일 용량은 20MB를 초과할 수 없습니다.`);
+        if (e.target) e.target.value = '';
+        return;
+      }
+      newTotalSize += file.size;
+      validFiles.push(file);
+    }
+
+    if (validFiles.length === 0) return;
+
     setUploadingReviewImage(true);
     setUploadProgress(0);
     
     try {
-      const uploadPromises = files.map(async (file) => {
-        const isVideo = file.type.startsWith('video/');
-        const limit = isVideo ? 100 : 10;
-        if (file.size > limit * 1024 * 1024) {
-          throw new Error(`${file.name}은(는) 너무 큽니다 (최대 ${limit}MB)`);
-        }
-        return uploadMedia(file, 'review', setUploadProgress);
+      const uploadPromises = validFiles.map(async (file) => {
+        const url = await uploadMedia(file, 'review', setUploadProgress);
+        return { url, size: file.size };
       });
       
-      const urls = await Promise.all(uploadPromises);
-      setEditReviewForm(prev => prev ? ({ ...prev, mediaUrls: [...prev.mediaUrls, ...urls] }) : null);
+      const results = await Promise.all(uploadPromises);
+      const urls = results.map(r => r.url);
+      const sizes = results.map(r => r.size);
+
+      setEditReviewForm(prev => prev ? ({ 
+        ...prev, 
+        mediaUrls: [...prev.mediaUrls, ...urls],
+        mediaSizes: [...(prev.mediaSizes || []), ...sizes]
+      }) : null);
     } catch (error: any) {
       console.error("Error uploading images:", error);
       await customAlert(`이미지 업로드에 실패했습니다: ${error.message}\n\n[해결 방법]\nFirebase Storage 요금제 문제일 수 있습니다. .env 파일에 VITE_CLOUDINARY_CLOUD_NAME과 VITE_CLOUDINARY_UPLOAD_PRESET을 설정하여 무료로 미디어를 업로드하세요.`);
@@ -1205,7 +1258,7 @@ export default function App() {
       if (typeof window !== 'undefined' && typeof (window as any).gtag === 'function') {
         (window as any).gtag('event', 'submit_review');
       }
-      setReviewForm({ content: '', nickname: '', password: '', mediaUrls: [], mediaUrlInput: '', isSpoiler: false, ratings: { overall: 0, story: 0, directing: 0 } });
+      setReviewForm({ content: '', nickname: '', password: '', mediaUrls: [], mediaSizes: [], mediaUrlInput: '', isSpoiler: false, ratings: { overall: 0, story: 0, directing: 0 } });
     } catch (error) {
       console.error("Error adding review:", error);
       await customAlert("감상평 등록에 실패했습니다. 다시 시도해주세요.");
@@ -1603,7 +1656,7 @@ export default function App() {
                   <div className="flex gap-3">
                     <div className="w-1.5 h-1.5 rounded-full bg-amber-300 mt-1.5 shrink-0" />
                     <p>
-                      부득이하게 기기 내의 미디어를 직접 업로드하실 경우, 서버 과부하 방지를 위해 적절한 용량의 파일을 사용해 주시길 부탁드립니다. <span className="text-amber-500 font-bold">(권장: 이미지 2MB, 영상 5MB 이하)</span>
+                      부득이하게 기기 내의 미디어를 직접 업로드하실 경우, 서버 과부하 방지를 위해 첨부파일 용량이 제한됩니다. <span className="text-amber-500 font-bold">(이미지 최대 3MB, 영상 최대 5MB, 감상평 당 총 20MB 이하)</span>
                     </p>
                   </div>
                   <div className="flex gap-3">
@@ -2221,6 +2274,7 @@ export default function App() {
                                 setReviewForm(prev => ({ 
                                   ...prev, 
                                   mediaUrls: [...prev.mediaUrls, prev.mediaUrlInput],
+                                  mediaSizes: [...prev.mediaSizes, 0],
                                   mediaUrlInput: ''
                                 }));
                               }
@@ -2306,6 +2360,19 @@ export default function App() {
                       </div>
                     </div>
 
+                    <div className="w-full space-y-1.5 px-1 mt-2">
+                      <div className="flex justify-between text-[10px] font-bold text-gray-400">
+                        <span>첨부파일 용량 (최대 20MB)</span>
+                        <span>{(reviewForm.mediaSizes.reduce((a, b) => a + b, 0) / (1024 * 1024)).toFixed(1)}MB / 20MB</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div 
+                          className={cn("h-full transition-all duration-300", reviewForm.mediaSizes.reduce((a, b) => a + b, 0) > 18 * 1024 * 1024 ? "bg-red-500" : "bg-blue-500")}
+                          style={{ width: `${Math.min(100, (reviewForm.mediaSizes.reduce((a, b) => a + b, 0) / (20 * 1024 * 1024)) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+
                     {reviewForm.mediaUrls.length > 0 && (
                       <div className="flex flex-wrap gap-2">
                         {reviewForm.mediaUrls.map((url, index) => {
@@ -2330,7 +2397,11 @@ export default function App() {
                               )}
                               <button 
                                 type="button"
-                                onClick={() => setReviewForm(prev => ({ ...prev, mediaUrls: prev.mediaUrls.filter((_, i) => i !== index) }))}
+                                onClick={() => setReviewForm(prev => ({ 
+                                  ...prev, 
+                                  mediaUrls: prev.mediaUrls.filter((_, i) => i !== index),
+                                  mediaSizes: prev.mediaSizes.filter((_, i) => i !== index)
+                                }))}
                                 className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
                               >
                                 <X className="w-4 h-4" />
@@ -3004,7 +3075,7 @@ export default function App() {
                     <div className="flex gap-3">
                       <div className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-2 shrink-0" />
                       <p>
-                        부득이하게 기기 내의 미디어를 직접 업로드하실 경우, 서버 과부하 방지를 위해 적절한 용량의 파일을 사용해 주시길 부탁드립니다. <span className="text-amber-500 font-bold">(권장: 이미지 2MB, 영상 5MB 이하)</span>
+                        부득이하게 기기 내의 미디어를 직접 업로드하실 경우, 서버 과부하 방지를 위해 첨부파일 용량이 제한됩니다. <span className="text-amber-500 font-bold">(이미지 최대 3MB, 영상 최대 5MB, 감상평 당 총 20MB 이하)</span>
                       </p>
                     </div>
                     <div className="flex gap-3">
@@ -3644,6 +3715,7 @@ export default function App() {
                             setEditReviewForm(prev => prev ? ({ 
                               ...prev, 
                               mediaUrls: [...prev.mediaUrls, editReviewForm.mediaUrlInput!],
+                              mediaSizes: [...(prev.mediaSizes || []), 0],
                               mediaUrlInput: ''
                             }) : null);
                           }
@@ -3677,7 +3749,11 @@ export default function App() {
                               )}
                               <button 
                                 type="button"
-                                onClick={() => setEditReviewForm(prev => prev ? ({ ...prev, mediaUrls: prev.mediaUrls.filter((_: any, i: number) => i !== idx) }) : null)}
+                                onClick={() => setEditReviewForm(prev => prev ? ({ 
+                                  ...prev, 
+                                  mediaUrls: prev.mediaUrls.filter((_: any, i: number) => i !== idx),
+                                  mediaSizes: (prev.mediaSizes || []).filter((_: any, i: number) => i !== idx)
+                                }) : null)}
                                 className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
                               >
                                 <X className="w-4 h-4" />
@@ -3726,6 +3802,19 @@ export default function App() {
                         className="w-4 h-4 rounded border-gray-300 text-amber-500 focus:ring-amber-500"
                       />
                       <label htmlFor="edit-spoiler" className="text-xs font-bold text-gray-500 cursor-pointer">스포일러 포함</label>
+                    </div>
+                  </div>
+
+                  <div className="w-full space-y-1.5 px-1 mt-2">
+                    <div className="flex justify-between text-[10px] font-bold text-gray-400">
+                      <span>첨부파일 용량 (최대 20MB)</span>
+                      <span>{((editReviewForm.mediaSizes || []).reduce((a: number, b: number) => a + b, 0) / (1024 * 1024)).toFixed(1)}MB / 20MB</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div 
+                        className={cn("h-full transition-all duration-300", (editReviewForm.mediaSizes || []).reduce((a: number, b: number) => a + b, 0) > 18 * 1024 * 1024 ? "bg-red-500" : "bg-blue-500")}
+                        style={{ width: `${Math.min(100, ((editReviewForm.mediaSizes || []).reduce((a: number, b: number) => a + b, 0) / (20 * 1024 * 1024)) * 100)}%` }}
+                      />
                     </div>
                   </div>
 
