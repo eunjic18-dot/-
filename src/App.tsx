@@ -163,7 +163,13 @@ export function CustomDialog() {
 }
 
 const ADMIN_EMAIL = "ceunji1218@gmail.com";
-
+// 🌟 대역폭 폭탄 방지용 마법의 주문 (Cloudinary 자동 최적화)
+const optimizeCloudinaryUrl = (url: string) => {
+  if (!url || typeof url !== 'string') return url;
+  if (!url.includes('res.cloudinary.com')) return url;
+  if (url.includes('/upload/q_auto,f_auto/')) return url;
+  return url.replace('/upload/', '/upload/q_auto,f_auto/');
+};
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
@@ -665,7 +671,11 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, 'cards'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const cardList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Card));
+      const cardList = snapshot.docs.map(doc => {
+        const data = doc.data() as Card;
+        if (data.imageUrls) data.imageUrls = data.imageUrls.map(optimizeCloudinaryUrl);
+        return { id: doc.id, ...data };
+      });
       setCards(cardList);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'cards'));
     return () => unsubscribe();
@@ -726,7 +736,11 @@ export default function App() {
       orderBy('createdAt', 'desc')
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const reviewList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
+      const reviewList = snapshot.docs.map(doc => {
+        const data = doc.data() as Review;
+        if (data.mediaUrls) data.mediaUrls = data.mediaUrls.map(optimizeCloudinaryUrl);
+        return { id: doc.id, ...data };
+      });
       setReviews(reviewList);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'reviews'));
     return () => unsubscribe();
