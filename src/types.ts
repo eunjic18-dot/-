@@ -12,10 +12,10 @@ export interface Card {
   pvUrl2?: string;
   memoryIntroUrl?: string;
   memoryIntroUrl2?: string;
-  linkedCardId?: string;
+  linkedCardId?: string | null;
   attribute: '공격' | '방어' | '체력';
   color: '레드' | '블루' | '골드' | '그린' | '퍼플' | '핑크' | '빨강' | '파랑' | '노랑' | '초록' | '보라' | '분홍';
-  type: '단독' | '단체' | '배포' | '상시';
+  type: '단독' | '단체' | '배포' | '상시' | '비밀 약속' | '주년 기념 배포' | '별의 나침반';
   category: '백야' | '월광';
   character: '심성훈' | '이서언' | '기욱' | '진운' | '하우주';
   rarity?: 4 | 5;
@@ -46,6 +46,7 @@ export interface Review {
 export interface Comment {
   id: string;
   reviewId: string;
+  cardId?: string;
   parentId?: string;
   content: string;
   nickname: string;

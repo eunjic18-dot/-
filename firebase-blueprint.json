@@ -78,12 +78,24 @@
         "visits": { "type": "number", "description": "Number of visits" },
         "paths": { "type": "object", "description": "Path visit counts" }
       }
+    },
+    "Suggestion": {
+      "title": "Suggestion",
+      "description": "User feedback or suggestion",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "description": "Suggestion text content" },
+        "ip": { "type": "string", "description": "User's IP address" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["content"]
     }
   },
   "firestore": {
     "/cards/{cardId}": { "schema": "Card", "description": "Collection of cards" },
     "/reviews/{reviewId}": { "schema": "Review", "description": "Collection of reviews" },
     "/comments/{commentId}": { "schema": "Comment", "description": "Collection of comments" },
-    "/stats/{statId}": { "schema": "Stats", "description": "Collection of stats" }
+    "/stats/{statId}": { "schema": "Stats", "description": "Collection of stats" },
+    "/suggestions/{suggestionId}": { "schema": "Suggestion", "description": "Collection of suggestions" }
   }
 }

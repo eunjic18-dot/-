@@ -20,7 +20,8 @@ import {
   increment,
   setDoc,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  getDocs
 } from 'firebase/firestore';
 // import { ref, getDownloadURL } from 'firebase/storage';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -54,7 +55,12 @@ import {
   AlertTriangle,
   Eye,
   EyeOff,
-  BarChart3
+  BarChart3,
+  MessageCircle,
+  Twitter,
+  Reply,
+  Trophy,
+  Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -269,11 +275,102 @@ const getLinkedCardIds = (cardId: string, allCards: Card[]) => {
   return Array.from(ids);
 };
 
+function RichTextEditor({ value, onChange, placeholder, id, className }: { value: string, onChange: (val: string) => void, placeholder?: string, id?: string, className?: string }) {
+  const editorRef = useRef<HTMLDivElement>(null);
+  const [isBold, setIsBold] = useState(false);
+  const [isItalic, setIsItalic] = useState(false);
+
+  const updateFormatState = () => {
+    setIsBold(document.queryCommandState('bold'));
+    setIsItalic(document.queryCommandState('italic'));
+  };
+
+  useEffect(() => {
+    document.addEventListener('selectionchange', updateFormatState);
+    return () => document.removeEventListener('selectionchange', updateFormatState);
+  }, []);
+
+  useEffect(() => {
+    if (editorRef.current && editorRef.current.innerHTML !== value) {
+      if (value === '') {
+        editorRef.current.innerHTML = '';
+      } else if (document.activeElement !== editorRef.current) {
+        editorRef.current.innerHTML = value;
+      }
+    }
+  }, [value]);
+
+  const handleInput = () => {
+    if (editorRef.current) {
+      onChange(editorRef.current.innerHTML);
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    document.execCommand('insertText', false, text);
+  };
+
+  const execCommand = (command: string) => {
+    document.execCommand(command, false, undefined);
+    updateFormatState();
+    if (editorRef.current) {
+      onChange(editorRef.current.innerHTML);
+      editorRef.current.focus();
+    }
+  };
+
+  return (
+    <div className={cn("w-full bg-white border border-gray-200 rounded-2xl overflow-hidden focus-within:ring-2 focus-within:ring-gray-200 transition-all", className)}>
+      <div className="flex items-center gap-1 p-2 border-b border-gray-100 bg-gray-50">
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => execCommand('bold')}
+          className={cn("w-8 h-8 flex items-center justify-center rounded-lg transition-colors", isBold ? "bg-gray-800 text-white" : "text-gray-500 hover:bg-gray-200 hover:text-gray-900")}
+          title="굵게"
+        >
+          <span className="font-bold text-sm">B</span>
+        </button>
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => execCommand('italic')}
+          className={cn("w-8 h-8 flex items-center justify-center rounded-lg transition-colors", isItalic ? "bg-gray-800 text-white" : "text-gray-500 hover:bg-gray-200 hover:text-gray-900")}
+          title="기울임"
+        >
+          <span className="italic text-sm font-serif">I</span>
+        </button>
+      </div>
+      <div className="relative">
+        <div
+          id={id}
+          ref={editorRef}
+          contentEditable
+          onInput={handleInput}
+          onPaste={handlePaste}
+          onKeyUp={updateFormatState}
+          onMouseUp={updateFormatState}
+          className="w-full px-4 py-3 text-sm outline-none overflow-y-auto"
+          style={{ minHeight: '120px' }}
+        />
+        {(!value || value === '<br>') && (
+          <div className="absolute top-3 left-4 text-gray-400 pointer-events-none text-sm">
+            {placeholder}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
   const [cardAverages, setCardAverages] = useState<{[key: string]: {overall: number, story: number, directing: number, count: number}}>({});
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdminModal, setShowAdminModal] = useState(false);
@@ -282,7 +379,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'전체' | '심성훈' | '이서언' | '기욱' | '진운' | '하우주'>('전체');
   const [rarityFilter, setRarityFilter] = useState<'all' | 4 | 5>('all');
   const [sortBy, setSortBy] = useState<'최신순' | '가나다순' | '출시일순' | '색상순' | '능력치순'>('최신순');
+  const [searchQuery, setSearchQuery] = useState('');
   const [showRulesModal, setShowRulesModal] = useState(false);
+  const [showHallOfFameModal, setShowHallOfFameModal] = useState(false);
   const [userIp, setUserIp] = useState<string>('');
   const [visitorId, setVisitorId] = useState<string>('');
   const isAdmin = user?.email === ADMIN_EMAIL;
@@ -292,21 +391,66 @@ export default function App() {
   const handleSelectCard = (card: Card) => {
     scrollPosRef.current = window.scrollY;
     setSelectedCard(card);
+    window.history.pushState({ cardId: card.id }, '', `?cardId=${card.id}`);
     window.scrollTo(0, 0);
   };
 
-  const handleBackToList = () => {
+  const clearSelectedCard = () => {
     setSelectedCard(null);
+    window.history.pushState({}, '', window.location.pathname);
+  };
+
+  const handleBackToList = () => {
+    clearSelectedCard();
     setTimeout(() => {
       window.scrollTo(0, scrollPosRef.current);
     }, 10);
   };
 
   const [showStats, setShowStats] = useState(false);
-  const [statsPeriod, setStatsPeriod] = useState<'1' | '7' | '30' | 'all'>('30');
-  const [stats, setStats] = useState<any[]>([]);
+  const [statsTab, setStatsTab] = useState<'stats' | 'bannedIps' | 'suggestions'>('stats');
+  const [adminStats, setAdminStats] = useState({
+    todayReviews: 0,
+    totalReviews: 0,
+    todayComments: 0,
+    bestReviews: [] as { content: string, author: string, cardName: string, cardId: string }[],
+    hotReviews: [] as { content: string, author: string, cardName: string, cardId: string }[],
+    mostLovedCards: [] as { name: string, avg: number, count: number, cardId: string }[],
+    characterStats: [] as { 
+      character: string, 
+      topWords: string[], 
+      topRatedCards: { text: string, cardId: string }[], 
+      topReviewedCards: { text: string, cardId: string }[], 
+      highestLikedCard: { name: string, avg: number, count: number, maxLikes: number, cardId: string } | null
+    }[]
+  });
+  const [bannedIps, setBannedIps] = useState<string[]>([]);
+  const [allCardComments, setAllCardComments] = useState<Comment[]>([]);
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [showSuggestionModal, setShowSuggestionModal] = useState(false);
+  const [suggestionContent, setSuggestionContent] = useState('');
 
-  // Admin Form State
+  useEffect(() => {
+    if (!selectedCard) {
+      setAllCardComments([]);
+      return;
+    }
+    const q = query(collection(db, 'comments'), where('cardId', '==', selectedCard.id));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setAllCardComments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Comment)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'comments'));
+    return () => unsubscribe();
+  }, [selectedCard]);
+
+  const getReviewNickname = (review: Review, allReviews: Review[]) => {
+    if (review.nickname && review.nickname !== '익명') return review.nickname;
+    const anonymousReviews = [...allReviews]
+      .filter(r => !r.nickname || r.nickname === '익명')
+      .sort((a, b) => (a.createdAt?.toMillis?.() || Date.now()) - (b.createdAt?.toMillis?.() || Date.now()));
+    const uniqueIdentifiers = Array.from(new Set(anonymousReviews.map(r => r.visitorId || r.ip || r.id)));
+    const userIndex = uniqueIdentifiers.indexOf(review.visitorId || review.ip || review.id);
+    return `익명${userIndex + 1}`;
+  };
   const [newCard, setNewCard] = useState<Partial<Card>>({
     name: '',
     imageUrls: [] as string[],
@@ -316,12 +460,16 @@ export default function App() {
     rerunEndDate: '',
     releaseDate: '',
     pvUrl: '',
+    pvUrl2: '',
     memoryIntroUrl: '',
+    memoryIntroUrl2: '',
     attribute: '공격' as Card['attribute'],
     color: '레드' as Card['color'],
     type: '단독' as Card['type'],
     category: '백야' as Card['category'],
-    character: '심성훈' as Card['character']
+    character: '심성훈' as Card['character'],
+    rarity: 5,
+    linkedCardId: null
   });
   const [tempImageUrl, setTempImageUrl] = useState('');
   const [uploadingImages, setUploadingImages] = useState(false);
@@ -523,12 +671,44 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (isInitialLoad && cards.length > 0) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const cardId = urlParams.get('cardId');
+      if (cardId) {
+        const card = cards.find(c => c.id === cardId);
+        if (card) {
+          setSelectedCard(card);
+        }
+      }
+      setIsInitialLoad(false);
+    }
+  }, [cards, isInitialLoad]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const cardId = urlParams.get('cardId');
+      if (cardId) {
+        const card = cards.find(c => c.id === cardId);
+        if (card) {
+          setSelectedCard(card);
+        }
+      } else {
+        setSelectedCard(null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [cards]);
+
+  useEffect(() => {
     if (selectedCard) {
       const updatedCard = cards.find(c => c.id === selectedCard.id);
       if (updatedCard && JSON.stringify(updatedCard) !== JSON.stringify(selectedCard)) {
         setSelectedCard(updatedCard);
       } else if (!updatedCard) {
-        setSelectedCard(null);
+        clearSelectedCard();
       }
     }
   }, [cards, selectedCard]);
@@ -560,19 +740,148 @@ export default function App() {
   }, [reviews, reviewSortBy]);
 
   useEffect(() => {
-    if (isAdmin && showStats) {
-      let q;
-      if (statsPeriod === 'all') {
-        q = query(collection(db, 'stats'), orderBy('date', 'desc'));
-      } else {
-        q = query(collection(db, 'stats'), orderBy('date', 'desc'), limit(parseInt(statsPeriod)));
-      }
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        setStats(snapshot.docs.map(doc => doc.data()));
-      });
-      return () => unsubscribe();
+    if ((isAdmin && showStats) || showHallOfFameModal) {
+      const fetchStats = async () => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const reviewsSnapshot = await getDocs(collection(db, 'reviews'));
+        const allReviews = reviewsSnapshot.docs.map(d => ({id: d.id, ...d.data()} as Review));
+        
+        const commentsSnapshot = await getDocs(collection(db, 'comments'));
+        const allComments = commentsSnapshot.docs.map(d => d.data() as Comment);
+
+        // Filter out reviews for cards that no longer exist
+        const validReviews = allReviews.filter(r => cards.some(c => c.id === r.cardId));
+
+        const todayReviews = validReviews.filter(r => r.createdAt && r.createdAt.toDate() >= today).length;
+        const totalReviews = validReviews.length;
+        const todayComments = allComments.filter(c => c.createdAt && c.createdAt.toDate() >= today && cards.some(card => card.id === c.cardId)).length;
+
+        // Top 5 Best Reviews (by likes)
+        const bestReviews = [...validReviews]
+          .sort((a, b) => (b.likes || 0) - (a.likes || 0))
+          .slice(0, 5)
+          .map(r => ({
+            content: r.content.substring(0, 20) + '...',
+            author: r.nickname,
+            cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
+            cardId: r.cardId
+          }));
+
+        // Top 5 HOT Reviews (by comments)
+        const hotReviews = [...validReviews]
+          .sort((a, b) => (b.commentCount || 0) - (a.commentCount || 0))
+          .slice(0, 5)
+          .map(r => ({
+            content: r.content.substring(0, 20) + '...',
+            author: r.nickname,
+            cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
+            cardId: r.cardId
+          }));
+
+        // Top 5 Most Loved Cards (by average rating)
+        const cardRatings = cards.map(card => {
+          const linkedIds = getLinkedCardIds(card.id, cards);
+          const cardReviews = allReviews.filter(r => linkedIds.includes(r.cardId));
+          const ratedReviews = cardReviews.filter(r => r.ratings?.overall);
+          const avg = ratedReviews.length > 0 
+            ? ratedReviews.reduce((sum, r) => sum + r.ratings!.overall, 0) / ratedReviews.length 
+            : 0;
+          return { name: card.name, avg, count: ratedReviews.length, cardId: card.id };
+        }).filter(c => c.count > 0);
+
+        const mostLovedCards = [...cardRatings]
+          .sort((a, b) => b.avg - a.avg || b.count - a.count)
+          .slice(0, 5);
+        
+        const characterMap = new Map<string, { 
+          cards: { name: string, avg: number, count: number, maxLikes: number, cardId: string }[], 
+          words: string[] 
+        }>();
+
+        cards.forEach(card => {
+          const linkedIds = getLinkedCardIds(card.id, cards);
+          const cardReviews = allReviews.filter(r => linkedIds.includes(r.cardId));
+          
+          let avg = 0;
+          let maxLikes = 0;
+          const ratedReviews = cardReviews.filter(r => r.ratings?.overall);
+          if (ratedReviews.length > 0) {
+            avg = ratedReviews.reduce((sum, r) => sum + r.ratings!.overall, 0) / ratedReviews.length;
+            maxLikes = Math.max(...cardReviews.map(r => r.likes || 0), 0);
+          }
+
+          if (card.character) {
+            if (!characterMap.has(card.character)) {
+              characterMap.set(card.character, { cards: [], words: [] });
+            }
+            const charData = characterMap.get(card.character)!;
+            if (cardReviews.length > 0) {
+              charData.cards.push({ name: card.name, avg, count: cardReviews.length, maxLikes, cardId: card.id });
+              cardReviews.forEach(r => {
+                const words = r.content.replace(/[^\w\s가-힣]/g, '').split(/\s+/);
+                charData.words.push(...words);
+              });
+            }
+          }
+        });
+
+        const stopWords = new Set(['너무', '진짜', '정말', '그리고', '근데', '이거', '저거', '그거', '이', '그', '저', '는', '은', '가', '에', '의', '도', '을', '를', '으로', '로', '에서', '과', '와', '다', '요', '입니다', '습니다', '하고', '해서', '하는', '할', '된', '될', '수', '있는', '없는', '같아요', '같다', '좋아요', '좋다', '많이', '조금', '아주', '매우', '잘', '못', '안', '더', '가장', '제일', '이런', '저런', '그런', '어떤', '무슨', '어떻게', '왜', '언제', '어디서', '누가', '무엇을', '어느', '아', '휴', '아이구', '아이쿠', '아이고', '어', '허', '헉', '허걱', '우와', '오', '와', '음', '응', '어머', '헐', 'ㅋㅋ', 'ㅎㅎ', 'ㅠㅠ', 'ㅜㅜ', '참', '좀', '수', '것', '들', '그냥', '다시', '이게', '저게', '그게', '내가', '네가', '우리가']);
+
+        const characterStats = Array.from(characterMap.entries()).map(([character, data]) => {
+          const wordCounts = new Map<string, number>();
+          data.words.forEach(w => {
+            if (w.length > 1 && !stopWords.has(w)) {
+              wordCounts.set(w, (wordCounts.get(w) || 0) + 1);
+            }
+          });
+          const topWords = Array.from(wordCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([word]) => word);
+
+          return {
+            character,
+            topWords,
+            topRatedCards: [...data.cards].sort((a, b) => b.avg - a.avg || b.count - a.count).slice(0, 3).map(c => ({ text: `${c.name} (${c.avg.toFixed(1)}점)`, cardId: c.cardId })),
+            topReviewedCards: [...data.cards].sort((a, b) => b.count - a.count || b.avg - a.avg).slice(0, 3).map(c => ({ text: `${c.name} (${c.count}개)`, cardId: c.cardId })),
+            highestLikedCard: [...data.cards].sort((a, b) => b.maxLikes - a.maxLikes || b.avg - a.avg)[0] || null
+          };
+        }).filter(stat => stat.topWords.length > 0 || stat.topRatedCards.length > 0);
+
+        setAdminStats({
+          todayReviews,
+          totalReviews,
+          todayComments,
+          bestReviews,
+          hotReviews,
+          mostLovedCards,
+          characterStats
+        });
+      };
+      fetchStats();
     }
-  }, [isAdmin, showStats, statsPeriod]);
+  }, [isAdmin, showStats, showHallOfFameModal, cards]);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'bannedIps'), (snapshot) => {
+      setBannedIps(snapshot.docs.map(doc => doc.id));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'bannedIps');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsubscribe = onSnapshot(collection(db, 'suggestions'), (snapshot) => {
+      setSuggestions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'suggestions');
+    });
+    return () => unsubscribe();
+  }, [isAdmin]);
 
   const handleAddCard = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -604,11 +913,16 @@ export default function App() {
         rerunEndDate: '',
         releaseDate: '',
         pvUrl: '',
+        pvUrl2: '',
+        memoryIntroUrl: '',
+        memoryIntroUrl2: '',
         attribute: '공격',
         color: '레드',
         type: '단독',
         character: '심성훈',
-        category: '백야'
+        category: '백야',
+        rarity: 5,
+        linkedCardId: null
       });
       setTempImageUrl('');
     } catch (error) {
@@ -639,12 +953,16 @@ export default function App() {
       rerunEndDate: card.rerunEndDate || '',
       releaseDate: card.releaseDate || '',
       pvUrl: card.pvUrl || '',
+      pvUrl2: card.pvUrl2 || '',
       memoryIntroUrl: card.memoryIntroUrl || '',
+      memoryIntroUrl2: card.memoryIntroUrl2 || '',
       attribute: card.attribute,
       color: newColor as any,
       type: card.type,
       category: card.category,
-      character: card.character
+      character: card.character,
+      rarity: card.rarity || 5,
+      linkedCardId: card.linkedCardId || null
     });
     setShowAdminModal(true);
   };
@@ -654,7 +972,7 @@ export default function App() {
     if (!(await customConfirm("정말 이 카드를 삭제하시겠습니까?"))) return;
     try {
       await deleteDoc(doc(db, 'cards', card.id));
-      setSelectedCard(null);
+      clearSelectedCard();
       await customAlert("카드가 삭제되었습니다.");
     } catch (error) {
       console.error("Error deleting card:", error);
@@ -749,9 +1067,9 @@ export default function App() {
   };
 
   const handleLikeReview = async (review: Review) => {
-    const identifier = user ? user.uid : userIp;
+    const identifier = user ? user.uid : visitorId;
     if (!identifier) {
-      await customAlert('좋아요를 누르려면 로그인이 필요하거나 IP를 가져올 수 있어야 합니다.');
+      await customAlert('좋아요를 누르려면 로그인이 필요하거나 방문자 ID를 가져올 수 있어야 합니다.');
       return;
     }
 
@@ -776,10 +1094,74 @@ export default function App() {
     }
   };
 
+  const handleBanIp = async (ip: string | undefined) => {
+    if (!ip || !isAdmin) return;
+    if (await customConfirm(`정말로 이 IP(${ip})를 차단하시겠습니까? 차단된 IP는 글과 댓글을 작성할 수 없습니다.`)) {
+      try {
+        await setDoc(doc(db, 'bannedIps', ip), { bannedAt: serverTimestamp() });
+        await customAlert("IP가 차단되었습니다.");
+      } catch (error) {
+        console.error("IP 차단 중 오류 발생:", error);
+        await customAlert("IP 차단에 실패했습니다.");
+      }
+    }
+  };
+
+  const handleUnbanIp = async (ip: string) => {
+    if (!isAdmin) return;
+    if (await customConfirm(`이 IP(${ip})의 차단을 해제하시겠습니까?`)) {
+      try {
+        await deleteDoc(doc(db, 'bannedIps', ip));
+        await customAlert("IP 차단이 해제되었습니다.");
+      } catch (error) {
+        console.error("IP 차단 해제 중 오류 발생:", error);
+        await customAlert("IP 차단 해제에 실패했습니다.");
+      }
+    }
+  };
+
+  const handleAddSuggestion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!suggestionContent.trim()) return;
+
+    try {
+      await addDoc(collection(db, 'suggestions'), {
+        content: suggestionContent,
+        ip: userIp,
+        createdAt: serverTimestamp()
+      });
+      setSuggestionContent('');
+      setShowSuggestionModal(false);
+      await customAlert("건의사항이 성공적으로 접수되었습니다. 감사합니다!");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'suggestions');
+      await customAlert("건의사항 접수에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    }
+  };
+
+  const handleDeleteSuggestion = async (id: string) => {
+    if (!isAdmin) return;
+    if (await customConfirm("정말로 이 건의사항을 삭제하시겠습니까?")) {
+      try {
+        await deleteDoc(doc(db, 'suggestions', id));
+        await customAlert("건의사항이 삭제되었습니다.");
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `suggestions/${id}`);
+        await customAlert("삭제에 실패했습니다.");
+      }
+    }
+  };
+
   const handleAddReview = async (e: React.FormEvent) => {
     e.preventDefault();
     console.log("handleAddReview called");
     if (!selectedCard) return;
+    
+    if (bannedIps.includes(userIp)) {
+      await customAlert("접근이 차단된 IP입니다. 부적절한 글 작성 및 도배 행위로 인해 차단되었을 수 있습니다.");
+      return;
+    }
+
     console.log("reviewForm.password length:", reviewForm.password.length);
     if (reviewForm.password.length < 4) {
       console.log("Password too short");
@@ -787,9 +1169,14 @@ export default function App() {
       return;
     }
     if (reviewForm.ratings.overall < 0.5) {
-        await customAlert("총평(별점)은 필수입니다.");
-        return;
-      }
+      await customAlert("총평(별점)은 필수입니다.");
+      return;
+    }
+    const cleanContent = reviewForm.content.replace(/<[^>]*>?/gm, '').trim();
+    if (!cleanContent) {
+      await customAlert("내용을 입력해주세요.");
+      return;
+    }
     try {
       console.log("Adding review...");
       await addDoc(collection(db, 'reviews'), {
@@ -799,7 +1186,11 @@ export default function App() {
         password: reviewForm.password || '',
         mediaUrls: reviewForm.mediaUrlInput ? [...reviewForm.mediaUrls, reviewForm.mediaUrlInput] : reviewForm.mediaUrls,
         isSpoiler: reviewForm.isSpoiler,
-        ratings: (reviewForm.ratings.overall > 0 || reviewForm.ratings.story > 0 || reviewForm.ratings.directing > 0) ? reviewForm.ratings : null,
+        ratings: reviewForm.ratings ? {
+          overall: reviewForm.ratings.overall || 0,
+          story: reviewForm.ratings.story || 0,
+          directing: reviewForm.ratings.directing || 0
+        } : null,
         likes: 0,
         likedBy: [],
         commentCount: 0,
@@ -808,6 +1199,9 @@ export default function App() {
         createdAt: serverTimestamp()
       });
       console.log("Review added successfully");
+      if (typeof window !== 'undefined' && typeof (window as any).gtag === 'function') {
+        (window as any).gtag('event', 'submit_review');
+      }
       setReviewForm({ content: '', nickname: '', password: '', mediaUrls: [], mediaUrlInput: '', isSpoiler: false, ratings: { overall: 0, story: 0, directing: 0 } });
     } catch (error) {
       console.error("Error adding review:", error);
@@ -826,9 +1220,10 @@ export default function App() {
       const reviewRef = doc(db, 'reviews', editingReviewId);
       
       // Ensure mediaUrls is updated correctly
+      const currentMediaUrls = editReviewForm.mediaUrls || [];
       const finalMediaUrls = editReviewForm.mediaUrlInput 
-        ? [...editReviewForm.mediaUrls, editReviewForm.mediaUrlInput]
-        : editReviewForm.mediaUrls;
+        ? [...currentMediaUrls, editReviewForm.mediaUrlInput]
+        : currentMediaUrls;
 
       const reviewPassword = review.password || '';
       const formPassword = editReviewForm.password || '';
@@ -841,21 +1236,30 @@ export default function App() {
         await customAlert("총평(별점)은 필수입니다.");
         return;
       }
+      const cleanContent = (editReviewForm.content || '').replace(/<[^>]*>?/gm, '').trim();
+      if (!cleanContent) {
+        await customAlert("내용을 입력해주세요.");
+        return;
+      }
 
       await updateDoc(reviewRef, {
-        content: editReviewForm.content,
+        content: editReviewForm.content || '',
         nickname: editReviewForm.nickname || '익명',
         mediaUrls: finalMediaUrls,
-        isSpoiler: editReviewForm.isSpoiler,
-        ratings: (editReviewForm.ratings.overall > 0 || editReviewForm.ratings.story > 0 || editReviewForm.ratings.directing > 0) ? editReviewForm.ratings : null,
+        isSpoiler: editReviewForm.isSpoiler || false,
+        ratings: editReviewForm.ratings ? {
+          overall: editReviewForm.ratings.overall || 0,
+          story: editReviewForm.ratings.story || 0,
+          directing: editReviewForm.ratings.directing || 0
+        } : null,
         updatedAt: serverTimestamp()
       });
       setEditingReviewId(null);
       setEditReviewForm(null);
       await customAlert("수정되었습니다.");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating review:", error);
-      await customAlert("수정에 실패했습니다.");
+      await customAlert(`수정에 실패했습니다: ${error.message}`);
     }
   };
 
@@ -917,7 +1321,36 @@ export default function App() {
     if (rarityFilter !== 'all') {
       list = list.filter(c => (c.rarity || 5) === rarityFilter);
     }
+
+    if (searchQuery.trim() !== '') {
+      list = list.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()));
+    }
     
+    const charOrder = ['심성훈', '이서언', '기욱', '진운', '하우주'];
+    const getCharIndex = (char: string) => {
+      const idx = charOrder.indexOf(char);
+      return idx === -1 ? 999 : idx;
+    };
+
+    const colorOrder = ['레드', '블루', '골드', '그린', '퍼플', '핑크'];
+    const getColorIndex = (color: string) => {
+      const idx = colorOrder.indexOf(color);
+      return idx === -1 ? 999 : idx;
+    };
+
+    const compareLatest = (a: Card, b: Card) => {
+      const dateA = a.releaseDate || a.gachaStartDate || '';
+      const dateB = b.releaseDate || b.gachaStartDate || '';
+      if (dateA === dateB) {
+        const charDiff = getCharIndex(a.character) - getCharIndex(b.character);
+        if (charDiff !== 0) return charDiff;
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeB - timeA;
+      }
+      return dateB.localeCompare(dateA);
+    };
+
     switch(sortBy) {
       case '가나다순':
         return [...list].sort((a, b) => a.name.localeCompare(b.name));
@@ -925,24 +1358,25 @@ export default function App() {
         return [...list].sort((a, b) => {
           const dateA = a.releaseDate || a.gachaStartDate || '';
           const dateB = b.releaseDate || b.gachaStartDate || '';
+          if (dateA === dateB) {
+            return getCharIndex(a.character) - getCharIndex(b.character);
+          }
           return dateA.localeCompare(dateB);
         });
       case '색상순':
-        return [...list].sort((a, b) => a.color.localeCompare(b.color));
-      case '능력치순':
-        return [...list].sort((a, b) => a.attribute.localeCompare(b.attribute));
-      default: // 최신순
         return [...list].sort((a, b) => {
-          const dateA = a.releaseDate || a.gachaStartDate || '';
-          const dateB = b.releaseDate || b.gachaStartDate || '';
-          // If dates are same, fallback to createdAt
-          if (dateA === dateB) {
-            const timeA = a.createdAt?.seconds || 0;
-            const timeB = b.createdAt?.seconds || 0;
-            return timeB - timeA;
-          }
-          return dateB.localeCompare(dateA);
+          const colorDiff = getColorIndex(a.color) - getColorIndex(b.color);
+          if (colorDiff !== 0) return colorDiff;
+          return compareLatest(a, b);
         });
+      case '능력치순':
+        return [...list].sort((a, b) => {
+          const attrDiff = a.attribute.localeCompare(b.attribute);
+          if (attrDiff !== 0) return attrDiff;
+          return compareLatest(a, b);
+        });
+      default: // 최신순
+        return [...list].sort(compareLatest);
     }
   })();
 
@@ -1064,16 +1498,16 @@ export default function App() {
         selectedCard && !isSidebarOpen && "hidden lg:flex"
       )}>
         <div className="p-8 flex items-center justify-between lg:block">
-          <div className="min-w-0">
-            <h1 
-              className="text-xl font-bold tracking-tight text-gray-900 leading-tight whitespace-nowrap cursor-pointer hover:opacity-70 transition-opacity"
-              onClick={() => {
-                setSelectedCard(null);
-                setActiveTab('전체');
-                setIsSidebarOpen(false);
-                window.scrollTo(0, 0);
-              }}
-            >
+          <div 
+            className="min-w-0 cursor-pointer hover:opacity-70 transition-opacity"
+            onClick={() => {
+              clearSelectedCard();
+              setActiveTab('전체');
+              setIsSidebarOpen(false);
+              window.scrollTo(0, 0);
+            }}
+          >
+            <h1 className="text-xl font-bold tracking-tight text-gray-900 leading-tight whitespace-nowrap">
               러브앤딥스페이스
             </h1>
             <p className="mt-1 text-[9px] font-black text-gray-400 uppercase tracking-[0.2em]">Card Archive</p>
@@ -1090,13 +1524,13 @@ export default function App() {
             <button
               key={tab}
               onClick={() => {
-                setSelectedCard(null);
+                clearSelectedCard();
                 setActiveTab(tab as any);
                 setIsSidebarOpen(false);
                 window.scrollTo(0, 0);
               }}
               className={cn(
-                "w-full text-left px-5 py-4 rounded-2xl text-sm font-bold transition-all relative overflow-hidden group",
+                "w-full text-left px-5 py-4 rounded-2xl text-sm font-bold transition-all relative overflow-hidden group cursor-pointer",
                 activeTab === tab ? cn("text-white shadow-lg", currentButton) : "text-gray-500 hover:bg-white/60 hover:text-gray-900"
               )}
             >
@@ -1135,6 +1569,10 @@ export default function App() {
                   <div className="flex gap-3">
                     <div className="w-1.5 h-1.5 rounded-full bg-gray-300 mt-1.5 shrink-0" />
                     <p>유저 간의 친목 도모, 네임드화, 타 커뮤니티 언급 등 분쟁을 조장할 수 있는 행위는 엄격히 금지됩니다.</p>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-1.5 shrink-0" />
+                    <p className="text-red-600 font-bold">부적절한 콘텐츠 작성 및 도배 시 예고 없이 IP가 차단될 수 있습니다.</p>
                   </div>
                   <div className="flex gap-3">
                     <div className="w-1.5 h-1.5 rounded-full bg-gray-300 mt-1.5 shrink-0" />
@@ -1201,7 +1639,7 @@ export default function App() {
                   setShowAdminModal(true);
                   setIsSidebarOpen(false);
                 }}
-                className={cn("w-full flex items-center justify-center gap-2 px-4 py-3 text-white transition-all rounded-xl text-sm font-bold shadow-md hover:shadow-lg hover:-translate-y-0.5", currentButton)}
+                className={cn("w-full flex items-center justify-center gap-2 px-4 py-3 text-white transition-all rounded-xl text-sm font-bold shadow-md hover:shadow-lg hover:-translate-y-0.5 cursor-pointer", currentButton)}
               >
                 <Plus className="w-4 h-4" />
                 카드 추가
@@ -1211,13 +1649,25 @@ export default function App() {
                   setShowStats(true);
                   setIsSidebarOpen(false);
                 }}
-                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all rounded-xl text-sm font-bold border border-indigo-100"
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all rounded-xl text-sm font-bold border border-indigo-100 cursor-pointer"
               >
                 <BarChart3 className="w-4 h-4" />
                 통계 보기
               </button>
             </div>
           )}
+          
+          <button 
+            onClick={() => {
+              setShowSuggestionModal(true);
+              setIsSidebarOpen(false);
+            }}
+            className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-3 bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all rounded-xl text-sm font-bold border border-rose-100 cursor-pointer"
+          >
+            <MessageSquare className="w-4 h-4" />
+            익명 건의함
+          </button>
+
           {user ? (
             <button 
               onClick={logOut}
@@ -1258,12 +1708,31 @@ export default function App() {
         !selectedCard ? "lg:ml-64 p-6 lg:p-12 pt-[calc(1.5rem+max(env(safe-area-inset-top),3rem))] lg:pt-[calc(3rem+env(safe-area-inset-top))]" : "lg:ml-64 p-0"
       )}>
         {!selectedCard && (
-          <div className="lg:hidden flex items-center justify-between mb-6">
-            <button 
-              onClick={() => setIsSidebarOpen(true)}
-              className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600"
+          <div className="lg:hidden flex items-center justify-between mb-6 gap-2">
+            <div className="flex items-center gap-2 flex-1">
+              <button 
+                onClick={() => setIsSidebarOpen(true)}
+                className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600 cursor-pointer shrink-0"
+              >
+                <Menu className="w-6 h-6" />
+              </button>
+              <div className="relative flex-1 max-w-[200px]">
+                <input
+                  type="text"
+                  placeholder="카드 검색"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              </div>
+            </div>
+            <button
+              onClick={() => setShowHallOfFameModal(true)}
+              className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600 flex items-center gap-2 text-xs font-bold cursor-pointer shrink-0"
             >
-              <Menu className="w-6 h-6" />
+              <Trophy className="w-5 h-5 text-amber-500" />
+              <span className="hidden sm:inline">명예의 전당</span>
             </button>
           </div>
         )}
@@ -1295,11 +1764,30 @@ export default function App() {
           <div>
             <div>
               <div className="flex justify-between items-center mb-8">
-                <h2 className="text-3xl font-bold text-gray-900">카드 아카이브</h2>
+                <div className="flex items-center gap-4">
+                  <h2 className="text-3xl font-bold text-gray-900">카드 아카이브</h2>
+                  <div className="hidden lg:flex relative">
+                    <input
+                      type="text"
+                      placeholder="카드 이름 검색"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+                    />
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  </div>
+                </div>
                 <div className="flex gap-2">
                   <button
+                    onClick={() => setShowHallOfFameModal(true)}
+                    className="hidden lg:flex items-center gap-1.5 bg-white/50 border border-gray-200 px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-white transition-colors focus:outline-none cursor-pointer"
+                  >
+                    <Trophy className="w-3.5 h-3.5 text-amber-500" />
+                    <span className="hidden sm:inline">명예의 전당</span>
+                  </button>
+                  <button
                     onClick={() => setShowRulesModal(true)}
-                    className="hidden lg:flex items-center gap-1.5 bg-white/50 border border-gray-200 px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-white transition-colors focus:outline-none"
+                    className="hidden lg:flex items-center gap-1.5 bg-white/50 border border-gray-200 px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-white transition-colors focus:outline-none cursor-pointer"
                   >
                     <Shield className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">이용 규칙</span>
@@ -1459,7 +1947,7 @@ export default function App() {
                 )}
                 
                 <button 
-                  onClick={() => setSelectedCard(null)}
+                  onClick={handleBackToList}
                   className="absolute top-4 left-4 w-10 h-10 rounded-full bg-white/90 shadow-lg flex items-center justify-center hover:bg-white transition-colors text-gray-900 z-50"
                 >
                   <X className="w-5 h-5" />
@@ -1657,48 +2145,56 @@ export default function App() {
                       {/* Ratings */}
                       <div className="lg:col-span-12 grid grid-cols-1 sm:grid-cols-3 gap-4 py-2">
                         <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                            <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> 총평 (필수)
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-3">
+                            <span className="flex items-center gap-1">
+                              <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> 총평 (필수)
+                            </span>
                           </label>
                           <div className="flex items-center gap-2">
-                            <input 
-                              type="range" 
-                              min="0.5" 
-                              max="5.0" 
-                              step="0.5"
-                              className="flex-1 accent-amber-500"
+                            <StarRatingInput 
                               value={reviewForm.ratings.overall}
-                              onChange={e => setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, overall: parseFloat(e.target.value) } }))}
+                              onChange={(val) => setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, overall: val } }))}
+                              required
                             />
                             <span className="text-sm font-bold text-amber-600 w-8 text-center">{reviewForm.ratings.overall.toFixed(1)}</span>
                           </div>
                         </div>
                         <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">스토리 (선택)</label>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-3">
+                            <span className="leading-none">스토리 (선택)</span>
+                            {reviewForm.ratings.story > 0 && (
+                              <button 
+                                onClick={(e) => { e.preventDefault(); setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, story: 0 } })); }}
+                                className="text-[9px] text-gray-400 hover:text-gray-600 underline leading-none"
+                              >
+                                초기화
+                              </button>
+                            )}
+                          </label>
                           <div className="flex items-center gap-2">
-                            <input 
-                              type="range" 
-                              min="0" 
-                              max="5.0" 
-                              step="0.5"
-                              className="flex-1 accent-gray-400"
+                            <StarRatingInput 
                               value={reviewForm.ratings.story}
-                              onChange={e => setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, story: parseFloat(e.target.value) } }))}
+                              onChange={(val) => setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, story: val } }))}
                             />
                             <span className="text-sm font-bold text-gray-500 w-8 text-center">{reviewForm.ratings.story > 0 ? reviewForm.ratings.story.toFixed(1) : '-'}</span>
                           </div>
                         </div>
                         <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">마음흔적 연출 (선택)</label>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-3">
+                            <span className="leading-none">마음흔적 연출 (선택)</span>
+                            {reviewForm.ratings.directing > 0 && (
+                              <button 
+                                onClick={(e) => { e.preventDefault(); setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, directing: 0 } })); }}
+                                className="text-[9px] text-gray-400 hover:text-gray-600 underline leading-none"
+                              >
+                                초기화
+                              </button>
+                            )}
+                          </label>
                           <div className="flex items-center gap-2">
-                            <input 
-                              type="range" 
-                              min="0" 
-                              max="5.0" 
-                              step="0.5"
-                              className="flex-1 accent-gray-400 custom-range"
+                            <StarRatingInput 
                               value={reviewForm.ratings.directing}
-                              onChange={e => setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, directing: parseFloat(e.target.value) } }))}
+                              onChange={(val) => setReviewForm(prev => ({ ...prev, ratings: { ...prev.ratings, directing: val } }))}
                             />
                             <span className="text-sm font-bold text-gray-500 w-8 text-center">{reviewForm.ratings.directing > 0 ? reviewForm.ratings.directing.toFixed(1) : '-'}</span>
                           </div>
@@ -1732,21 +2228,37 @@ export default function App() {
                           </button>
                         </div>
                         <div className="flex flex-wrap gap-2 mt-2">
-                          {reviewForm.mediaUrls.map((url, index) => (
-                            <div key={index} className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded-lg text-xs">
-                              <span className="truncate max-w-[100px]">{url}</span>
-                              <button 
-                                type="button"
-                                onClick={() => setReviewForm(prev => ({ 
-                                  ...prev, 
-                                  mediaUrls: prev.mediaUrls.filter((_, i) => i !== index)
-                                }))}
-                                className="text-gray-500 hover:text-red-500"
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))}
+                          {reviewForm.mediaUrls.map((url, index) => {
+                            const twitterMatch = url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/);
+                            const youtubeMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/);
+                            return (
+                              <div key={index} className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded-lg text-xs border border-gray-200">
+                                {twitterMatch ? (
+                                  <div className="flex items-center gap-1 text-blue-500 font-bold">
+                                    <Twitter className="w-3 h-3" />
+                                    <span className="truncate max-w-[100px]">트위터</span>
+                                  </div>
+                                ) : youtubeMatch ? (
+                                  <div className="flex items-center gap-1 text-red-600 font-bold">
+                                    <Youtube className="w-3 h-3" />
+                                    <span className="truncate max-w-[100px]">유튜브</span>
+                                  </div>
+                                ) : (
+                                  <span className="truncate max-w-[100px]">{url}</span>
+                                )}
+                                <button 
+                                  type="button"
+                                  onClick={() => setReviewForm(prev => ({ 
+                                    ...prev, 
+                                    mediaUrls: prev.mediaUrls.filter((_, i) => i !== index)
+                                  }))}
+                                  className="text-gray-500 hover:text-red-500 ml-1"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>
@@ -1793,33 +2305,47 @@ export default function App() {
 
                     {reviewForm.mediaUrls.length > 0 && (
                       <div className="flex flex-wrap gap-2">
-                        {reviewForm.mediaUrls.map((url, index) => (
-                          <div key={index} className="relative w-16 h-16 rounded-xl overflow-hidden border border-gray-100 group">
-                            {url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) || url.includes('video') ? (
-                              <video src={url} className="w-full h-full object-cover" />
-                            ) : (
-                              <img src={url} alt={`Preview ${index}`} className="w-full h-full object-cover" />
-                            )}
-                            <button 
-                              type="button"
-                              onClick={() => setReviewForm(prev => ({ ...prev, mediaUrls: prev.mediaUrls.filter((_, i) => i !== index) }))}
-                              className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        ))}
+                        {reviewForm.mediaUrls.map((url, index) => {
+                          const twitterMatch = url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/);
+                          const youtubeMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/);
+                          return (
+                            <div key={index} className="relative w-16 h-16 rounded-xl overflow-hidden border border-gray-100 group bg-gray-50 flex items-center justify-center">
+                              {twitterMatch ? (
+                                <div className="flex flex-col items-center gap-1 text-blue-500">
+                                  <Twitter className="w-5 h-5" />
+                                  <span className="text-[8px] font-bold">트위터</span>
+                                </div>
+                              ) : youtubeMatch ? (
+                                <div className="flex flex-col items-center gap-1 text-red-600">
+                                  <Youtube className="w-5 h-5" />
+                                  <span className="text-[8px] font-bold">유튜브</span>
+                                </div>
+                              ) : url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) || url.includes('video') ? (
+                                <video src={url} className="w-full h-full object-cover" />
+                              ) : (
+                                <img src={url} alt={`Preview ${index}`} className="w-full h-full object-cover" />
+                              )}
+                              <button 
+                                type="button"
+                                onClick={() => setReviewForm(prev => ({ ...prev, mediaUrls: prev.mediaUrls.filter((_, i) => i !== index) }))}
+                                className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">내용</label>
-                      <textarea 
+                      <RichTextEditor
+                        id="review-content"
                         placeholder="카드 스토리에 대한 감상을 자유롭게 적어주세요..."
-                        className="w-full h-40 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200 transition-all resize-none"
                         value={reviewForm.content}
-                        onChange={e => setReviewForm(prev => ({ ...prev, content: e.target.value }))}
-                        required
+                        onChange={val => setReviewForm(prev => ({ ...prev, content: val }))}
+                        className="bg-gray-50 border-gray-100"
                       />
                     </div>
                     
@@ -1871,6 +2397,8 @@ export default function App() {
                       <ReviewCard 
                         key={review.id} 
                         review={review} 
+                        allReviews={reviews}
+                        allCardComments={allCardComments}
                         accentColor={currentAccent} 
                         buttonColor={currentButton} 
                         onDelete={() => handleDeleteReview(review)}
@@ -1889,8 +2417,11 @@ export default function App() {
                         onLike={handleLikeReview}
                         isAdmin={isAdmin}
                         userIp={userIp}
+                        visitorId={visitorId}
                         user={user}
                         onZoom={(urls, index) => setGlobalLightboxData({ urls, index })}
+                        bannedIps={bannedIps}
+                        onBanIp={handleBanIp}
                       />
                     ))}
                     
@@ -2064,6 +2595,21 @@ export default function App() {
                       value={newCard.pvUrl || ''}
                       onChange={e => setNewCard(prev => ({ ...prev, pvUrl: e.target.value }))}
                     />
+                    {newCard.pvUrl && (
+                      <div className="mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 border border-gray-200 w-fit">
+                        {newCard.pvUrl.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/) ? (
+                          <div className="flex items-center gap-1 text-blue-500 font-bold text-[10px]">
+                            <Twitter className="w-3 h-3" /> <span>트위터</span>
+                          </div>
+                        ) : newCard.pvUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/) ? (
+                          <div className="flex items-center gap-1 text-red-600 font-bold text-[10px]">
+                            <Youtube className="w-3 h-3" /> <span>유튜브</span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-500 truncate max-w-[200px]">{newCard.pvUrl}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">PV 링크 2 (선택)</label>
@@ -2074,6 +2620,21 @@ export default function App() {
                       value={newCard.pvUrl2 || ''}
                       onChange={e => setNewCard(prev => ({ ...prev, pvUrl2: e.target.value }))}
                     />
+                    {newCard.pvUrl2 && (
+                      <div className="mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 border border-gray-200 w-fit">
+                        {newCard.pvUrl2.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/) ? (
+                          <div className="flex items-center gap-1 text-blue-500 font-bold text-[10px]">
+                            <Twitter className="w-3 h-3" /> <span>트위터</span>
+                          </div>
+                        ) : newCard.pvUrl2.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/) ? (
+                          <div className="flex items-center gap-1 text-red-600 font-bold text-[10px]">
+                            <Youtube className="w-3 h-3" /> <span>유튜브</span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-500 truncate max-w-[200px]">{newCard.pvUrl2}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-4">
@@ -2086,6 +2647,21 @@ export default function App() {
                       value={newCard.memoryIntroUrl || ''}
                       onChange={e => setNewCard(prev => ({ ...prev, memoryIntroUrl: e.target.value }))}
                     />
+                    {newCard.memoryIntroUrl && (
+                      <div className="mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 border border-gray-200 w-fit">
+                        {newCard.memoryIntroUrl.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/) ? (
+                          <div className="flex items-center gap-1 text-blue-500 font-bold text-[10px]">
+                            <Twitter className="w-3 h-3" /> <span>트위터</span>
+                          </div>
+                        ) : newCard.memoryIntroUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/) ? (
+                          <div className="flex items-center gap-1 text-red-600 font-bold text-[10px]">
+                            <Youtube className="w-3 h-3" /> <span>유튜브</span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-500 truncate max-w-[200px]">{newCard.memoryIntroUrl}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">메모리 소개 영상 링크 2 (선택)</label>
@@ -2096,6 +2672,21 @@ export default function App() {
                       value={newCard.memoryIntroUrl2 || ''}
                       onChange={e => setNewCard(prev => ({ ...prev, memoryIntroUrl2: e.target.value }))}
                     />
+                    {newCard.memoryIntroUrl2 && (
+                      <div className="mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 border border-gray-200 w-fit">
+                        {newCard.memoryIntroUrl2.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/) ? (
+                          <div className="flex items-center gap-1 text-blue-500 font-bold text-[10px]">
+                            <Twitter className="w-3 h-3" /> <span>트위터</span>
+                          </div>
+                        ) : newCard.memoryIntroUrl2.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/) ? (
+                          <div className="flex items-center gap-1 text-red-600 font-bold text-[10px]">
+                            <Youtube className="w-3 h-3" /> <span>유튜브</span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-500 truncate max-w-[200px]">{newCard.memoryIntroUrl2}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -2103,10 +2694,10 @@ export default function App() {
                   <select
                     className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200"
                     value={newCard.linkedCardId || ''}
-                    onChange={e => setNewCard(prev => ({ ...prev, linkedCardId: e.target.value || undefined }))}
+                    onChange={e => setNewCard(prev => ({ ...prev, linkedCardId: e.target.value || null }))}
                   >
                     <option value="">없음</option>
-                    {cards.filter(c => c.id !== newCard.id).map(c => (
+                    {cards.filter(c => c.id !== editingCardId).map(c => (
                       <option key={c.id} value={c.id}>{c.name} ({c.character})</option>
                     ))}
                   </select>
@@ -2199,6 +2790,9 @@ export default function App() {
                       <option value="단체">단체</option>
                       <option value="배포">배포</option>
                       <option value="상시">상시</option>
+                      <option value="비밀 약속">비밀 약속</option>
+                      <option value="주년 기념 배포">주년 기념 배포</option>
+                      <option value="별의 나침반">별의 나침반</option>
                     </select>
                   </div>
                 </div>
@@ -2214,7 +2808,16 @@ export default function App() {
                         type: '단독',
                         attribute: '공격',
                         color: '레드',
-                        imageUrls: []
+                        imageUrls: [],
+                        rarity: 5,
+                        pvUrl: '',
+                        pvUrl2: '',
+                        memoryIntroUrl: '',
+                        memoryIntroUrl2: '',
+                        releaseDate: '',
+                        gachaStartDate: '',
+                        gachaEndDate: '',
+                        linkedCardId: null
                       });
                     }}
                     className="flex-1 py-4 border border-gray-200 rounded-xl font-bold text-gray-400 hover:bg-gray-50 transition-colors"
@@ -2229,6 +2832,85 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Suggestion Modal */}
+      <AnimatePresence>
+        {showSuggestionModal && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSuggestionModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-white rounded-[2rem] shadow-2xl overflow-hidden flex flex-col"
+            >
+              <div className="p-6 sm:p-8 flex items-center justify-between border-b border-gray-100 bg-white/80 backdrop-blur-md sticky top-0 z-10">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm bg-rose-500">
+                    <MessageSquare className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">익명 건의함</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">사이트 개선을 위한 의견을 남겨주세요</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowSuggestionModal(false)}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="p-6 sm:p-8 overflow-y-auto custom-scrollbar">
+                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-5 mb-6">
+                  <p className="text-sm text-rose-800 leading-relaxed font-medium">
+                    본 서비스는 비영리 목적으로 운영되는 개인 아카이빙 공간입니다.
+                    <br /><br />
+                    보내주시는 의견은 서비스 품질 향상에 소중한 밑거름이 됩니다. 다만, 운영 환경의 제약으로 인해 모든 건의사항을 즉각적으로 검토하거나 반영하기 어려운 점 양해 부탁드립니다.
+                    <br /><br />
+                    무분별한 비방, 욕설, 도배 등 운영 취지에 어긋나는 부적절한 게시물은 엄격히 금지되며, 발견 시 사전 고지 없이 삭제 및 이용 제한 조치가 취해질 수 있습니다. 성숙한 피드백 문화를 위해 협조 부탁드립니다.
+                  </p>
+                </div>
+
+                <form onSubmit={handleAddSuggestion} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">건의 내용</label>
+                    <textarea
+                      value={suggestionContent}
+                      onChange={(e) => setSuggestionContent(e.target.value)}
+                      placeholder="자유롭게 의견을 남겨주세요..."
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 min-h-[150px] resize-none"
+                      required
+                    />
+                  </div>
+                  <div className="flex gap-3 pt-4">
+                    <button 
+                      type="button"
+                      onClick={() => setShowSuggestionModal(false)}
+                      className="flex-1 py-3 border border-gray-200 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition-colors"
+                    >
+                      취소
+                    </button>
+                    <button 
+                      type="submit"
+                      className="flex-1 py-3 bg-rose-500 text-white rounded-xl font-bold shadow-md hover:bg-rose-600 transition-colors"
+                    >
+                      건의하기
+                    </button>
+                  </div>
+                </form>
+              </div>
             </motion.div>
           </div>
         )}
@@ -2271,11 +2953,13 @@ export default function App() {
               
               <div className="p-6 sm:p-8 overflow-y-auto custom-scrollbar space-y-8">
                 <div>
-                  <h3 className="text-sm font-bold text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-gray-900" />
+                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-lg bg-gray-900 flex items-center justify-center text-white">
+                      <Shield className="w-3.5 h-3.5" />
+                    </div>
                     기본 이용 규칙
                   </h3>
-                  <div className="space-y-4 text-sm leading-relaxed text-gray-600 font-medium bg-gray-50 p-6 rounded-2xl">
+                  <div className="space-y-4 text-sm leading-relaxed text-gray-600 font-medium bg-gray-50 p-6 rounded-2xl border border-gray-100">
                     <div className="flex gap-3">
                       <div className="w-1.5 h-1.5 rounded-full bg-gray-300 mt-2 shrink-0" />
                       <p>본 아카이브는 러브앤딥스페이스 카드 감상평을 자유롭게 나누는 공간입니다.</p>
@@ -2289,6 +2973,10 @@ export default function App() {
                       <p>유저 간의 친목 도모, 네임드화, 타 커뮤니티 언급 등 분쟁을 조장할 수 있는 행위는 엄격히 금지됩니다.</p>
                     </div>
                     <div className="flex gap-3">
+                      <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-2 shrink-0" />
+                      <p className="text-red-600 font-bold">부적절한 콘텐츠 작성 및 도배 시 예고 없이 IP가 차단될 수 있습니다.</p>
+                    </div>
+                    <div className="flex gap-3">
                       <div className="w-1.5 h-1.5 rounded-full bg-gray-300 mt-2 shrink-0" />
                       <p>스포일러가 포함된 감상평 및 댓글은 반드시 <span className="font-bold text-amber-500">스포일러 체크</span>를 해주시기 바랍니다.</p>
                     </div>
@@ -2296,21 +2984,23 @@ export default function App() {
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-bold text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2">
-                    <UploadCloud className="w-4 h-4 text-gray-900" />
+                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-lg bg-amber-500 flex items-center justify-center text-white shadow-sm shadow-amber-200">
+                      <Zap className="w-3.5 h-3.5" />
+                    </div>
                     서버 최적화를 위한 권장 사항
                   </h3>
-                  <div className="space-y-4 text-sm leading-relaxed text-gray-600 font-medium bg-amber-50/50 p-6 rounded-2xl border border-amber-100/50">
+                  <div className="space-y-4 text-sm leading-relaxed text-gray-600 font-medium bg-amber-50/30 p-6 rounded-2xl border border-amber-100/50">
                     <div className="flex gap-3">
                       <div className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-2 shrink-0" />
                       <p>
-                        안정적인 서버 운영을 위해 유튜브, 트위터 등 <span className="text-amber-600 font-bold">URL 삽입이 가능한 미디어는 가급적 URL로 첨부</span>해 주시길 적극 권장합니다. 직접 업로드 대신 URL을 사용하시면 서버 부하를 크게 줄일 수 있습니다.
+                        안정적인 서버 운영을 위해 유튜브, 트위터 등 <span className="text-amber-500 font-bold">URL 삽입이 가능한 미디어는 가급적 URL로 첨부</span>해 주시길 적극 권장합니다. 직접 업로드 대신 URL을 사용하시면 서버 부하를 크게 줄일 수 있습니다.
                       </p>
                     </div>
                     <div className="flex gap-3">
                       <div className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-2 shrink-0" />
                       <p>
-                        부득이하게 기기 내의 미디어를 직접 업로드하실 경우, 서버 과부하 방지를 위해 적절한 용량의 파일을 사용해 주시길 부탁드립니다. <span className="text-amber-600 font-bold">(권장: 이미지 2MB, 영상 5MB 이하)</span>
+                        부득이하게 기기 내의 미디어를 직접 업로드하실 경우, 서버 과부하 방지를 위해 적절한 용량의 파일을 사용해 주시길 부탁드립니다. <span className="text-amber-500 font-bold">(권장: 이미지 2MB, 영상 5MB 이하)</span>
                       </p>
                     </div>
                     <div className="flex gap-3">
@@ -2326,10 +3016,156 @@ export default function App() {
               <div className="p-6 border-t border-gray-100 bg-gray-50/50">
                 <button 
                   onClick={() => setShowRulesModal(false)}
-                  className={cn("w-full py-4 text-white rounded-xl font-bold shadow-lg transition-all", currentButton)}
+                  className={cn("w-full py-4 text-white rounded-xl font-bold shadow-lg transition-all cursor-pointer", currentButton)}
                 >
                   확인했습니다
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Hall of Fame Modal */}
+      <AnimatePresence>
+        {showHallOfFameModal && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowHallOfFameModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-gray-100 bg-white sticky top-0 z-10 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm bg-gradient-to-br from-amber-400 to-amber-600">
+                    <Trophy className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">명예의 전당</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">가장 사랑받는 카드와 감상평들</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowHallOfFameModal(false)}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              
+              <div className="p-6 overflow-y-auto space-y-8">
+                {/* Best Reviews */}
+                <div>
+                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-lg bg-amber-100 flex items-center justify-center text-amber-600">
+                      <Heart className="w-3.5 h-3.5" />
+                    </div>
+                    베스트 감상평 <span className="text-xs font-bold text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full">TOP 3</span>
+                  </h3>
+                  <div className="space-y-3">
+                    {adminStats.bestReviews.slice(0, 3).map((r, i) => {
+                      const card = cards.find(c => c.name === r.cardName);
+                      return (
+                        <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.split('\n')[0]}</p>
+                          <button 
+                            onClick={() => {
+                              if (card) {
+                                handleSelectCard(card);
+                                setShowHallOfFameModal(false);
+                              }
+                            }}
+                            className="text-[11px] font-bold text-gray-500 hover:text-amber-600 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            {card && <span className="text-amber-600/80">{card.character}</span>}
+                            {card && <span className="text-gray-300 mx-0.5">|</span>}
+                            {r.cardName} <ChevronRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {adminStats.bestReviews.length === 0 && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
+                  </div>
+                </div>
+
+                {/* HOT Reviews */}
+                <div>
+                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-lg bg-rose-100 flex items-center justify-center text-rose-600">
+                      <MessageCircle className="w-3.5 h-3.5" />
+                    </div>
+                    HOT 감상평 <span className="text-xs font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full">TOP 3</span>
+                  </h3>
+                  <div className="space-y-3">
+                    {adminStats.hotReviews.slice(0, 3).map((r, i) => {
+                      const card = cards.find(c => c.name === r.cardName);
+                      return (
+                        <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.split('\n')[0]}</p>
+                          <button 
+                            onClick={() => {
+                              if (card) {
+                                handleSelectCard(card);
+                                setShowHallOfFameModal(false);
+                              }
+                            }}
+                            className="text-[11px] font-bold text-gray-500 hover:text-rose-600 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            {card && <span className="text-rose-600/80">{card.character}</span>}
+                            {card && <span className="text-gray-300 mx-0.5">|</span>}
+                            {r.cardName} <ChevronRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {adminStats.hotReviews.length === 0 && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
+                  </div>
+                </div>
+
+                {/* Most Loved Cards */}
+                <div>
+                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600">
+                      <Star className="w-3.5 h-3.5" />
+                    </div>
+                    가장 사랑받는 카드 <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full">TOP 3</span>
+                  </h3>
+                  <div className="space-y-3">
+                    {adminStats.mostLovedCards.slice(0, 3).map((c, i) => {
+                      const card = cards.find(card => card.name === c.name);
+                      return (
+                        <div key={i} className="flex items-center justify-between bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                          <button 
+                            onClick={() => {
+                              if (card) {
+                                handleSelectCard(card);
+                                setShowHallOfFameModal(false);
+                              }
+                            }}
+                            className="text-sm font-bold text-gray-800 hover:text-indigo-600 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            {card && <span className="text-indigo-600/80 text-xs">{card.character}</span>}
+                            {card && <span className="text-gray-300 mx-1">|</span>}
+                            {c.name} <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                          <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-100">
+                            <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                            <span className="text-xs font-bold text-gray-700">{c.avg.toFixed(1)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {adminStats.mostLovedCards.length === 0 && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
+                  </div>
+                </div>
               </div>
             </motion.div>
           </div>
@@ -2359,26 +3195,30 @@ export default function App() {
                     <BarChart3 className="w-6 h-6" />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-bold text-gray-900">방문자 통계</h2>
-                    <p className="text-xs text-gray-400 font-medium">
-                      {statsPeriod === '1' ? '오늘의 트래픽 데이터' : 
-                       statsPeriod === '7' ? '최근 7일간의 트래픽 데이터' : 
-                       statsPeriod === '30' ? '최근 30일간의 트래픽 데이터' : 
-                       '전체 트래픽 데이터'}
-                    </p>
+                    <h2 className="text-2xl font-bold text-gray-900">관리자 패널</h2>
+                    <div className="flex gap-4 mt-2">
+                      <button
+                        onClick={() => setStatsTab('stats')}
+                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'stats' ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                      >
+                        방문자 통계
+                      </button>
+                      <button
+                        onClick={() => setStatsTab('bannedIps')}
+                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'bannedIps' ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                      >
+                        차단된 IP 관리
+                      </button>
+                      <button
+                        onClick={() => setStatsTab('suggestions')}
+                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'suggestions' ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                      >
+                        건의사항
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <select
-                    value={statsPeriod}
-                    onChange={(e) => setStatsPeriod(e.target.value as any)}
-                    className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="1">오늘</option>
-                    <option value="7">최근 7일</option>
-                    <option value="30">최근 30일</option>
-                    <option value="all">누적 전체</option>
-                  </select>
                   <button 
                     onClick={() => setShowStats(false)}
                     className="p-3 hover:bg-gray-100 rounded-2xl transition-colors text-gray-400"
@@ -2389,169 +3229,256 @@ export default function App() {
               </div>
 
               <div className="p-8 overflow-y-auto custom-scrollbar space-y-8">
-                {/* Summary Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <div className="p-6 rounded-3xl bg-indigo-50 border border-indigo-100 text-center">
-                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">방문 (세션)</p>
-                    <p className="text-3xl font-bold text-indigo-900">{stats.reduce((acc, curr) => acc + (curr.visits || 0), 0)}</p>
-                  </div>
-                  <div className="p-6 rounded-3xl bg-blue-50 border border-blue-100 text-center">
-                    <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">고유 방문자</p>
-                    <p className="text-3xl font-bold text-blue-900">{stats.reduce((acc, curr) => acc + (curr.uniqueVisitors || 0), 0)}</p>
-                  </div>
-                  <div className="p-6 rounded-3xl bg-emerald-50 border border-emerald-100 text-center">
-                    <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1">페이지뷰</p>
-                    <p className="text-3xl font-bold text-emerald-900">{stats.reduce((acc, curr) => acc + (curr.pageViews || 0), 0)}</p>
-                  </div>
-                  <div className="p-6 rounded-3xl bg-amber-50 border border-amber-100 text-center">
-                    <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-1">일평균 방문자</p>
-                    <p className="text-3xl font-bold text-amber-900">{stats.length > 0 ? Math.round(stats.reduce((acc, curr) => acc + (curr.uniqueVisitors || 0), 0) / stats.length) : 0}</p>
-                  </div>
-                </div>
+                {statsTab === 'stats' ? (
+                  <>
+                    {/* Summary Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                      <div className="p-6 rounded-3xl bg-indigo-50 border border-indigo-100 text-center">
+                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">오늘의 신규 감상평</p>
+                        <p className="text-3xl font-bold text-indigo-900">{adminStats.todayReviews}</p>
+                      </div>
+                      <div className="p-6 rounded-3xl bg-blue-50 border border-blue-100 text-center">
+                        <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">누적 감상평 수</p>
+                        <p className="text-3xl font-bold text-blue-900">{adminStats.totalReviews}</p>
+                      </div>
+                      <div className="p-6 rounded-3xl bg-emerald-50 border border-emerald-100 text-center">
+                        <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1">오늘의 신규 댓글</p>
+                        <p className="text-3xl font-bold text-emerald-900">{adminStats.todayComments}</p>
+                      </div>
+                    </div>
 
-                {/* Daily Traffic */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-bold text-gray-800 px-2">일별 트래픽</h3>
-                  <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100">
-                    <div className="flex items-end gap-1 h-40">
-                      {stats.slice().reverse().map((stat, idx) => (
-                        <div key={idx} className="flex-1 flex flex-col items-center gap-2 group relative">
-                          <div 
-                            className="w-full bg-indigo-400 rounded-t-lg transition-all group-hover:bg-indigo-600"
-                            style={{ height: `${Math.min(100, (stat.visits / (Math.max(...stats.map(s => s.visits)) || 1)) * 100)}%` }}
-                          />
-                          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-gray-900 text-white text-[10px] py-1 px-2 rounded whitespace-nowrap z-20">
-                            {stat.date}: {stat.visits}명
-                          </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="p-6 rounded-3xl bg-amber-50 border border-amber-100">
+                        <p className="text-sm font-bold text-amber-500 uppercase tracking-widest mb-3 flex items-center gap-1">
+                          <Heart className="w-3 h-3" /> 베스트 감상평 (Top 5)
+                        </p>
+                        <div className="space-y-3">
+                          {adminStats.bestReviews.length > 0 ? adminStats.bestReviews.map((r, i) => (
+                            <div key={i} className="text-base leading-relaxed">
+                              <p className="font-bold text-amber-900 truncate">{r.content}</p>
+                              <p className="text-amber-600/70 flex justify-between">
+                                <span>{r.author}</span>
+                                <span 
+                                  className="truncate ml-2 italic cursor-pointer hover:underline"
+                                  onClick={() => {
+                                    const card = cards.find(c => c.id === r.cardId);
+                                    if (card) {
+                                      handleSelectCard(card);
+                                      setShowStats(false);
+                                    }
+                                  }}
+                                >
+                                  @{cards.find(c => c.id === r.cardId)?.character} | {r.cardName}
+                                </span>
+                              </p>
+                            </div>
+                          )) : <p className="text-sm text-amber-400">데이터 없음</p>}
                         </div>
-                      ))}
+                      </div>
+                      <div className="p-6 rounded-3xl bg-rose-50 border border-rose-100">
+                        <p className="text-sm font-bold text-rose-500 uppercase tracking-widest mb-3 flex items-center gap-1">
+                          <MessageCircle className="w-3 h-3" /> HOT 감상평 (Top 5)
+                        </p>
+                        <div className="space-y-3">
+                          {adminStats.hotReviews.length > 0 ? adminStats.hotReviews.map((r, i) => (
+                            <div key={i} className="text-base leading-relaxed">
+                              <p className="font-bold text-rose-900 truncate">{r.content}</p>
+                              <p className="text-rose-600/70 flex justify-between">
+                                <span>{r.author}</span>
+                                <span 
+                                  className="truncate ml-2 italic cursor-pointer hover:underline"
+                                  onClick={() => {
+                                    const card = cards.find(c => c.id === r.cardId);
+                                    if (card) {
+                                      handleSelectCard(card);
+                                      setShowStats(false);
+                                    }
+                                  }}
+                                >
+                                  @{cards.find(c => c.id === r.cardId)?.character} | {r.cardName}
+                                </span>
+                              </p>
+                            </div>
+                          )) : <p className="text-sm text-rose-400">데이터 없음</p>}
+                        </div>
+                      </div>
+                      <div className="p-6 rounded-3xl bg-purple-50 border border-purple-100">
+                        <p className="text-sm font-bold text-purple-500 uppercase tracking-widest mb-3 flex items-center gap-1">
+                          <Star className="w-3 h-3" /> 가장 사랑받는 카드 (Top 5)
+                        </p>
+                        <div className="space-y-3">
+                          {adminStats.mostLovedCards.length > 0 ? adminStats.mostLovedCards.map((c, i) => (
+                            <div key={i} className="flex items-center justify-between text-base">
+                              <span 
+                                className="font-bold text-purple-900 truncate mr-2 cursor-pointer hover:underline"
+                                onClick={() => {
+                                  const card = cards.find(card => card.id === c.cardId);
+                                  if (card) {
+                                    handleSelectCard(card);
+                                    setShowStats(false);
+                                  }
+                                }}
+                              >
+                                {cards.find(card => card.id === c.cardId)?.character} | {c.name}
+                              </span>
+                              <div className="flex items-center gap-1 bg-white/60 px-2 py-1 rounded-full border border-purple-100/50 shrink-0">
+                                <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                                <span className="text-purple-700 font-bold">{c.avg.toFixed(1)}</span>
+                              </div>
+                            </div>
+                          )) : <p className="text-sm text-purple-400">데이터 없음</p>}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex justify-between mt-4 text-[10px] font-bold text-gray-400 px-1">
-                      <span>{stats[stats.length - 1]?.date}</span>
-                      <span>{stats[0]?.date}</span>
-                    </div>
-                  </div>
-                </div>
 
-                {/* Path Analysis */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-bold text-gray-800 px-2">페이지별 트래픽</h3>
-                  <div className="bg-white border border-gray-100 rounded-3xl overflow-hidden">
-                    <table className="w-full text-left text-sm">
-                      <thead className="bg-gray-50 border-b border-gray-100">
-                        <tr>
-                          <th className="px-6 py-4 font-bold text-gray-500">페이지</th>
-                          <th className="px-6 py-4 font-bold text-gray-500 text-right">방문 횟수</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {Object.entries(
-                          stats.reduce((acc: any, curr) => {
-                            if (curr.paths) {
-                              Object.entries(curr.paths).forEach(([path, count]) => {
-                                acc[path] = (acc[path] || 0) + count;
-                              });
-                            }
-                            return acc;
-                          }, {})
-                        ).sort((a: any, b: any) => b[1] - a[1]).map(([path, count]: any) => {
-                          let displayName = path.replace(/_/g, '/');
-                          if (path.startsWith('card_')) {
-                            const cardId = path.replace('card_', '');
-                            const card = cards.find(c => c.id === cardId);
-                            if (card) {
-                              displayName = `[${card.character}] ${card.name}`;
-                            } else {
-                              displayName = `[카드] 삭제됨 (${cardId})`;
-                            }
-                          } else if (path === 'home') {
-                            displayName = '[메인] 홈 화면';
-                          }
-                          return (
-                            <tr key={path} className="hover:bg-gray-50 transition-colors">
-                              <td className="px-6 py-4 font-medium text-xs text-gray-600">{displayName}</td>
-                              <td className="px-6 py-4 font-bold text-gray-900 text-right">{count}</td>
+                    {adminStats.characterStats.length > 0 && (
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-bold text-gray-800 px-2">캐릭터별 지표</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {adminStats.characterStats.map((charStat, idx) => (
+                            <div key={idx} className="p-6 rounded-3xl bg-gray-50 border border-gray-100 space-y-5">
+                              <h4 className="font-bold text-gray-900 text-lg border-b border-gray-200 pb-2">{charStat.character}</h4>
+                              
+                              <div>
+                                <p className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-2">자주 등장하는 단어 TOP 10</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {charStat.topWords.length > 0 ? charStat.topWords.map((word, i) => (
+                                    <span key={i} className="px-2 py-0.5 bg-white border border-gray-200 rounded-md text-sm font-bold text-gray-600">
+                                      #{word}
+                                    </span>
+                                  )) : <span className="text-sm text-gray-400">데이터 없음</span>}
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2">평균 평점 순 인기 카드</p>
+                                  <ul className="space-y-1">
+                                    {charStat.topRatedCards.map((card, i) => (
+                                      <li key={i} className="text-base font-medium text-gray-700 truncate">
+                                        {i + 1}. <span 
+                                          className="cursor-pointer hover:underline"
+                                          onClick={() => {
+                                            const c = cards.find(c => c.id === card.cardId);
+                                            if (c) {
+                                              handleSelectCard(c);
+                                              setShowStats(false);
+                                            }
+                                          }}
+                                        >{card.text}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                                <div>
+                                  <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2">감상평 개수 순 인기 카드</p>
+                                  <ul className="space-y-1">
+                                    {charStat.topReviewedCards.map((card, i) => (
+                                      <li key={i} className="text-base font-medium text-gray-700 truncate">
+                                        {i + 1}. <span 
+                                          className="cursor-pointer hover:underline"
+                                          onClick={() => {
+                                            const c = cards.find(c => c.id === card.cardId);
+                                            if (c) {
+                                              handleSelectCard(c);
+                                              setShowStats(false);
+                                            }
+                                          }}
+                                        >{card.text}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
+
+                              <div className="pt-2 border-t border-gray-100">
+                                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-1">가장 높은 좋아요의 감상평이 있는 카드</p>
+                                <p 
+                                  className="text-base font-bold text-indigo-600 cursor-pointer hover:underline"
+                                  onClick={() => {
+                                    if (charStat.highestLikedCard) {
+                                      const c = cards.find(c => c.id === charStat.highestLikedCard?.cardId);
+                                      if (c) {
+                                        handleSelectCard(c);
+                                        setShowStats(false);
+                                      }
+                                    }
+                                  }}
+                                >
+                                  {charStat.highestLikedCard ? charStat.highestLikedCard.name : '-'}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : statsTab === 'bannedIps' ? (
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-bold text-gray-800 px-2">차단된 IP 목록 ({bannedIps.length})</h3>
+                    {bannedIps.length === 0 ? (
+                      <div className="p-8 text-center bg-gray-50 rounded-3xl border border-gray-100">
+                        <p className="text-gray-500 font-medium">현재 차단된 IP가 없습니다.</p>
+                      </div>
+                    ) : (
+                      <div className="bg-white border border-gray-100 rounded-3xl overflow-hidden">
+                        <table className="w-full text-left text-sm">
+                          <thead className="bg-gray-50 border-b border-gray-100">
+                            <tr>
+                              <th className="px-6 py-4 font-bold text-gray-500">IP 주소</th>
+                              <th className="px-6 py-4 font-bold text-gray-500 text-right">관리</th>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                          </thead>
+                          <tbody className="divide-y divide-gray-50">
+                            {bannedIps.map((ip) => (
+                              <tr key={ip} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-6 py-4 font-medium text-gray-900">{ip}</td>
+                                <td className="px-6 py-4 text-right">
+                                  <button
+                                    onClick={() => handleUnbanIp(ip)}
+                                    className="px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-bold transition-colors"
+                                  >
+                                    차단 해제
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-                  {/* Device Analysis */}
+                ) : (
                   <div className="space-y-4">
-                    <h3 className="text-lg font-bold text-gray-800 px-2">디바이스</h3>
-                    <div className="bg-white border border-gray-100 rounded-3xl overflow-hidden">
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-gray-50 border-b border-gray-100">
-                          <tr>
-                            <th className="px-6 py-4 font-bold text-gray-500">디바이스</th>
-                            <th className="px-6 py-4 font-bold text-gray-500 text-right">비율</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {(() => {
-                            const deviceStats = stats.reduce((acc, curr) => {
-                              Object.entries(curr.devices || {}).forEach(([device, count]) => {
-                                acc[device] = (acc[device] || 0) + (count as number);
-                              });
-                              return acc;
-                            }, {} as Record<string, number>);
-                            const total = (Object.values(deviceStats).reduce((a: number, b: number) => a + b, 0) as number) || 1;
-                            return Object.entries(deviceStats)
-                              .sort(([, a], [, b]) => (b as number) - (a as number))
-                              .map(([device, count]) => (
-                                <tr key={device} className="hover:bg-gray-50 transition-colors">
-                                  <td className="px-6 py-4 text-gray-600 font-medium capitalize">{device}</td>
-                                  <td className="px-6 py-4 text-gray-900 font-bold text-right">
-                                    {Math.round(((count as number) / total) * 100)}%
-                                  </td>
-                                </tr>
-                              ));
-                          })()}
-                        </tbody>
-                      </table>
-                    </div>
+                    <h3 className="text-lg font-bold text-gray-800 px-2">건의사항 목록 ({suggestions.length})</h3>
+                    {suggestions.length === 0 ? (
+                      <div className="p-8 text-center bg-gray-50 rounded-3xl border border-gray-100">
+                        <p className="text-gray-500 font-medium">접수된 건의사항이 없습니다.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {suggestions.sort((a, b) => (b.createdAt?.toMillis() || Date.now()) - (a.createdAt?.toMillis() || Date.now())).map((suggestion) => (
+                          <div key={suggestion.id} className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm relative group">
+                            <div className="flex justify-between items-start mb-4">
+                              <div className="text-xs text-gray-400 font-medium">
+                                {suggestion.createdAt ? suggestion.createdAt.toDate().toLocaleString() : '방금 전'}
+                              </div>
+                              <button
+                                onClick={() => handleDeleteSuggestion(suggestion.id)}
+                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors opacity-0 group-hover:opacity-100"
+                                title="삭제"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{suggestion.content}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-
-                  {/* Browser Analysis */}
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-bold text-gray-800 px-2">브라우저</h3>
-                    <div className="bg-white border border-gray-100 rounded-3xl overflow-hidden">
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-gray-50 border-b border-gray-100">
-                          <tr>
-                            <th className="px-6 py-4 font-bold text-gray-500">브라우저</th>
-                            <th className="px-6 py-4 font-bold text-gray-500 text-right">비율</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {(() => {
-                            const browserStats = stats.reduce((acc, curr) => {
-                              Object.entries(curr.browsers || {}).forEach(([browser, count]) => {
-                                acc[browser] = (acc[browser] || 0) + (count as number);
-                              });
-                              return acc;
-                            }, {} as Record<string, number>);
-                            const total = (Object.values(browserStats).reduce((a: number, b: number) => a + b, 0) as number) || 1;
-                            return Object.entries(browserStats)
-                              .sort(([, a], [, b]) => (b as number) - (a as number))
-                              .map(([browser, count]) => (
-                                <tr key={browser} className="hover:bg-gray-50 transition-colors">
-                                  <td className="px-6 py-4 text-gray-600 font-medium">{browser}</td>
-                                  <td className="px-6 py-4 text-gray-900 font-bold text-right">
-                                    {Math.round(((count as number) / total) * 100)}%
-                                  </td>
-                                </tr>
-                              ));
-                          })()}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
+                )}
               </div>
             </motion.div>
           </div>
@@ -2612,61 +3539,72 @@ export default function App() {
                   {/* Ratings for Edit */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 py-2">
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                        <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> 총평 (필수)
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-3">
+                        <span className="flex items-center gap-1">
+                          <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> 총평 (필수)
+                        </span>
                       </label>
                       <div className="flex items-center gap-2">
-                        <input 
-                          type="range" 
-                          min="0.5" 
-                          max="5.0" 
-                          step="0.5"
-                          className="flex-1 accent-amber-500"
+                        <StarRatingInput 
                           value={editReviewForm.ratings?.overall || 0.5}
-                          onChange={e => setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { story: 0, directing: 0 }), overall: parseFloat(e.target.value) } }) : null)}
+                          onChange={(val) => setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { story: 0, directing: 0 }), overall: val } }) : null)}
+                          required
                         />
                         <span className="text-sm font-bold text-amber-600 w-8 text-center">{(editReviewForm.ratings?.overall || 0.5).toFixed(1)}</span>
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">스토리 (선택)</label>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-3">
+                        <span className="leading-none">스토리 (선택)</span>
+                        {(editReviewForm.ratings?.story || 0) > 0 && (
+                          <button 
+                            onClick={(e) => { e.preventDefault(); setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { overall: 0, directing: 0 }), story: 0 } }) : null); }}
+                            className="text-[9px] text-gray-400 hover:text-gray-600 underline leading-none"
+                          >
+                            초기화
+                          </button>
+                        )}
+                      </label>
                       <div className="flex items-center gap-2">
-                        <input 
-                          type="range" 
-                          min="0" 
-                          max="5.0" 
-                          step="0.5"
-                          className="flex-1 accent-gray-400"
+                        <StarRatingInput 
                           value={editReviewForm.ratings?.story || 0}
-                          onChange={e => setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { overall: 0, directing: 0 }), story: parseFloat(e.target.value) } }) : null)}
+                          onChange={(val) => setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { overall: 0, directing: 0 }), story: val } }) : null)}
                         />
                         <span className="text-sm font-bold text-gray-500 w-8 text-center">{(editReviewForm.ratings?.story || 0) > 0 ? (editReviewForm.ratings?.story || 0).toFixed(1) : '-'}</span>
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">마음흔적 연출 (선택)</label>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-3">
+                        <span className="leading-none">마음흔적 연출 (선택)</span>
+                        {(editReviewForm.ratings?.directing || 0) > 0 && (
+                          <button 
+                            onClick={(e) => { e.preventDefault(); setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { overall: 0, story: 0 }), directing: 0 } }) : null); }}
+                            className="text-[9px] text-gray-400 hover:text-gray-600 underline leading-none"
+                          >
+                            초기화
+                          </button>
+                        )}
+                      </label>
                       <div className="flex items-center gap-2">
-                        <input 
-                          type="range" 
-                          min="0" 
-                          max="5.0" 
-                          step="0.5"
-                          className="flex-1 accent-gray-400 custom-range"
+                        <StarRatingInput 
                           value={editReviewForm.ratings?.directing || 0}
-                          onChange={e => setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { overall: 0, story: 0 }), directing: parseFloat(e.target.value) } }) : null)}
+                          onChange={(val) => setEditReviewForm(prev => prev ? ({ ...prev, ratings: { ...(prev.ratings || { overall: 0, story: 0 }), directing: val } }) : null)}
                         />
                         <span className="text-sm font-bold text-gray-500 w-8 text-center">{(editReviewForm.ratings?.directing || 0) > 0 ? (editReviewForm.ratings?.directing || 0).toFixed(1) : '-'}</span>
                       </div>
                     </div>
                   </div>
 
-                  <textarea 
-                    placeholder="감상평을 자유롭게 남겨주세요..."
-                    className="w-full bg-gray-50 border border-gray-100 rounded-3xl px-6 py-5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200 min-h-[150px] resize-none transition-all"
-                    value={editReviewForm.content}
-                    onChange={e => setEditReviewForm(prev => prev ? ({ ...prev, content: e.target.value }) : null)}
-                    required
-                  />
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">내용</label>
+                    <RichTextEditor
+                      id="edit-review-content"
+                      placeholder="감상평을 자유롭게 남겨주세요..."
+                      value={editReviewForm.content}
+                      onChange={val => setEditReviewForm(prev => prev ? ({ ...prev, content: val }) : null)}
+                      className="bg-gray-50 border-gray-100 min-h-[150px]"
+                    />
+                  </div>
 
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">미디어 URL (이미지, 유튜브 또는 트위터 링크)</label>
@@ -2696,22 +3634,36 @@ export default function App() {
                     </div>
                     {editReviewForm.mediaUrls.length > 0 && (
                       <div className="flex flex-wrap gap-2 mt-2">
-                        {editReviewForm.mediaUrls.map((url: string, idx: number) => (
-                          <div key={idx} className="relative w-20 h-20 rounded-xl overflow-hidden border border-gray-100 group">
-                            {url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) || url.includes('video') ? (
-                              <video src={url} className="w-full h-full object-cover" />
-                            ) : (
-                              <img src={url} alt={`Preview ${idx}`} className="w-full h-full object-cover" />
-                            )}
-                            <button 
-                              type="button"
-                              onClick={() => setEditReviewForm(prev => prev ? ({ ...prev, mediaUrls: prev.mediaUrls.filter((_: any, i: number) => i !== idx) }) : null)}
-                              className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        ))}
+                        {editReviewForm.mediaUrls.map((url: string, idx: number) => {
+                          const twitterMatch = url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/);
+                          const youtubeMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/);
+                          return (
+                            <div key={idx} className="relative w-20 h-20 rounded-xl overflow-hidden border border-gray-100 group bg-gray-50 flex items-center justify-center">
+                              {twitterMatch ? (
+                                <div className="flex flex-col items-center gap-1 text-blue-500">
+                                  <Twitter className="w-5 h-5" />
+                                  <span className="text-[8px] font-bold">트위터</span>
+                                </div>
+                              ) : youtubeMatch ? (
+                                <div className="flex flex-col items-center gap-1 text-red-600">
+                                  <Youtube className="w-5 h-5" />
+                                  <span className="text-[8px] font-bold">유튜브</span>
+                                </div>
+                              ) : url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) || url.includes('video') ? (
+                                <video src={url} className="w-full h-full object-cover" />
+                              ) : (
+                                <img src={url} alt={`Preview ${idx}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              )}
+                              <button 
+                                type="button"
+                                onClick={() => setEditReviewForm(prev => prev ? ({ ...prev, mediaUrls: prev.mediaUrls.filter((_: any, i: number) => i !== idx) }) : null)}
+                                className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2786,6 +3738,25 @@ export default function App() {
                 setGlobalLightboxData(null);
               }
             }}
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              (e.currentTarget as any).touchStartX = touch.clientX;
+            }}
+            onTouchEnd={(e) => {
+              if (isZoomed) return;
+              const touchStartX = (e.currentTarget as any).touchStartX;
+              if (touchStartX === undefined) return;
+              const touchEndX = e.changedTouches[0].clientX;
+              const diff = touchStartX - touchEndX;
+              if (diff > 50) {
+                lightboxSwiped.current = true;
+                setGlobalLightboxData(prev => prev ? { ...prev, index: (prev.index + 1) % prev.urls.length } : null);
+              } else if (diff < -50) {
+                lightboxSwiped.current = true;
+                setGlobalLightboxData(prev => prev ? { ...prev, index: (prev.index - 1 + prev.urls.length) % prev.urls.length } : null);
+              }
+              (e.currentTarget as any).touchStartX = undefined;
+            }}
           >
             <button 
               className="absolute top-[max(env(safe-area-inset-top,2rem),2rem)] right-4 sm:right-8 text-white/60 hover:text-white transition-colors z-[99999]"
@@ -2821,6 +3792,7 @@ export default function App() {
               {(() => {
                 const url = globalLightboxData.urls[globalLightboxData.index];
                 const youtubeMatch = url.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([a-zA-Z0-9_-]+)/);
+                const twitterMatch = url.match(/(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/(\d+)/);
                 
                 if (youtubeMatch) {
                   return (
@@ -2838,6 +3810,22 @@ export default function App() {
                         allow="autoplay; fullscreen"
                         allowFullScreen
                       />
+                    </motion.div>
+                  );
+                }
+
+                if (twitterMatch) {
+                  return (
+                    <motion.div
+                      key={globalLightboxData.index}
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.9, opacity: 0 }}
+                      className="w-full max-w-md bg-white rounded-xl overflow-hidden z-50 p-4 flex flex-col items-center"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Tweet id={twitterMatch[1]} />
+                      <p className="text-[10px] text-gray-400 mt-2 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
                     </motion.div>
                   );
                 }
@@ -2881,6 +3869,7 @@ export default function App() {
                       centerOnInit
                       wheel={{ step: 0.1 }}
                       doubleClick={{ mode: "zoomIn" }}
+                      onTransformed={(ref) => setIsZoomed(ref.state.scale > 1.01)}
                     >
                       <TransformComponent wrapperClass="!w-full !h-full flex items-center justify-center" contentClass="!w-full !h-full flex items-center justify-center">
                         <img
@@ -2904,14 +3893,42 @@ export default function App() {
   );
 }
 
+function StarRatingInput({ value, onChange, required = false }: { value: number, onChange: (val: number) => void, required?: boolean }) {
+  return (
+    <div className="flex items-center gap-1">
+      {[1, 2, 3, 4, 5].map((star) => {
+        const isHalf = value === star - 0.5;
+        const isFull = value >= star;
+        return (
+          <div key={star} className="relative w-8 h-8 md:w-6 md:h-6 cursor-pointer touch-manipulation">
+            <div 
+              className="absolute inset-y-0 left-0 w-1/2 z-10" 
+              onClick={() => onChange(star - 0.5)}
+            />
+            <div 
+              className="absolute inset-y-0 right-0 w-1/2 z-10" 
+              onClick={() => onChange(star)}
+            />
+            <div className="w-full h-full relative">
+              <Star className="w-full h-full text-gray-200 absolute top-0 left-0" />
+              <div className={cn("absolute top-0 left-0 h-full overflow-hidden", isHalf ? "w-1/2" : isFull ? "w-full" : "w-0")}>
+                <Star className="w-8 h-8 md:w-6 md:h-6 fill-amber-400 text-amber-400" />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CardItem({ card, setSelectedCard, average }: { card: Card, setSelectedCard: (card: Card) => void, average?: {overall: number, story: number, directing: number, count: number} }) {
   return (
     <motion.div
-      layout
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
+      transition={{ duration: 0.3 }}
       onClick={() => setSelectedCard(card)}
       className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-white border border-gray-200 cursor-pointer shadow-sm hover:shadow-xl transition-all"
       whileHover={{ y: -8 }}
@@ -2991,15 +4008,25 @@ function CardItem({ card, setSelectedCard, average }: { card: Card, setSelectedC
   );
 }
 
-function CommentItem({ comment, comments, onDelete, onZoom, renderContentWithEmbeds, onReply }: { comment: Comment, comments: Comment[], onDelete: () => void, onZoom: (urls: string[], index: number) => void, renderContentWithEmbeds: (content: string) => React.ReactNode, onReply: (comment: Comment) => void }) {
+function CommentItem({ comment, comments, allComments, onDelete, onZoom, renderContentWithEmbeds, onReply, isAdmin, bannedIps, onBanIp }: { comment: Comment, comments: Comment[], allComments: Comment[], onDelete: () => void, onZoom: (urls: string[], index: number) => void, renderContentWithEmbeds: (content: string) => React.ReactNode, onReply: (comment: Comment) => void, isAdmin: boolean, bannedIps: string[], onBanIp: (ip: string | undefined) => void }) {
   const [isRevealed, setIsRevealed] = useState(false);
 
   const getNickname = () => {
     if (comment.nickname && comment.nickname !== '익명') return comment.nickname;
     
-    const anonymousComments = comments.filter(c => !c.nickname || c.nickname === '익명');
-    const uniqueIdentifiers = Array.from(new Set(anonymousComments.map(c => c.visitorId || c.ip || c.id)));
-    const userIndex = uniqueIdentifiers.indexOf(comment.visitorId || comment.ip || comment.id);
+    // Scope anonymous numbering to the specific review
+    const anonymousComments = [...comments]
+      .filter(c => !c.nickname || c.nickname === '익명')
+      .sort((a, b) => (a.createdAt?.toMillis?.() || Date.now()) - (b.createdAt?.toMillis?.() || Date.now()));
+    
+    const currentIdentifier = comment.visitorId || comment.ip || comment.id;
+    const identifiers = anonymousComments.map(c => c.visitorId || c.ip || c.id);
+    if (!identifiers.includes(currentIdentifier)) {
+      identifiers.push(currentIdentifier);
+    }
+    
+    const uniqueIdentifiers = Array.from(new Set(identifiers));
+    const userIndex = uniqueIdentifiers.indexOf(currentIdentifier);
     
     return `익명${userIndex + 1}`;
   };
@@ -3023,7 +4050,14 @@ function CommentItem({ comment, comments, onDelete, onZoom, renderContentWithEmb
         {nickname[0]}
       </div>
       <div className="flex-1 min-w-0 space-y-1">
-        <div className="flex flex-wrap items-center justify-between gap-y-1">
+        {isAdmin && comment.ip && (
+          <div className="mb-0.5">
+            <span className="text-[8px] sm:text-[9px] text-gray-400 font-mono bg-gray-100 px-1 py-0.5 rounded">
+              {comment.ip}
+            </span>
+          </div>
+        )}
+        <div className="flex items-start justify-between gap-y-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
             <span className="text-xs font-bold text-gray-900 truncate max-w-[100px] sm:max-w-none">{nickname}</span>
             <span className="text-[9px] text-gray-400 font-sans shrink-0">
@@ -3033,7 +4067,16 @@ function CommentItem({ comment, comments, onDelete, onZoom, renderContentWithEmb
               <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-600 text-[8px] font-black uppercase tracking-tighter border border-amber-100 shrink-0">Spoiler</span>
             )}
           </div>
-          <div className="flex items-center gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-all">
+          <div className="flex items-center gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-all shrink-0">
+            {isAdmin && comment.ip && !bannedIps.includes(comment.ip) && (
+              <button 
+                onClick={() => onBanIp(comment.ip)}
+                className="p-1 text-gray-400 hover:text-red-600 transition-all"
+                title="IP 차단"
+              >
+                <Shield className="w-3 h-3" />
+              </button>
+            )}
             <button 
               onClick={() => onReply(comment)}
               className="p-1 text-gray-400 hover:text-blue-500 transition-all"
@@ -3116,7 +4159,7 @@ function CommentItem({ comment, comments, onDelete, onZoom, renderContentWithEmb
   );
 }
 
-function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike, isAdmin, userIp, user, onZoom }: { review: Review, accentColor: string, buttonColor: string, onDelete: () => void, onEdit: () => void, onLike: (review: Review) => void, isAdmin: boolean, userIp: string, user: User | null, onZoom: (urls: string[], index: number) => void }) {
+function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonColor, onDelete, onEdit, onLike, isAdmin, userIp, visitorId, user, onZoom, bannedIps, onBanIp }: { review: Review, allReviews: Review[], allCardComments: Comment[], accentColor: string, buttonColor: string, onDelete: () => void, onEdit: () => void, onLike: (review: Review) => void, isAdmin: boolean, userIp: string, visitorId: string, user: User | null, onZoom: (urls: string[], index: number) => void, bannedIps: string[], onBanIp: (ip: string | undefined) => void }) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentText, setCommentText] = useState('');
   const [nickname, setNickname] = useState('');
@@ -3130,37 +4173,62 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
   const [showComments, setShowComments] = useState(false);
   const [commentsPage, setCommentsPage] = useState(1);
   const COMMENTS_PER_PAGE = 10;
+
+  const getNickname = () => {
+    if (review.nickname && review.nickname !== '익명') return review.nickname;
+    const anonymousReviews = [...allReviews]
+      .filter(r => !r.nickname || r.nickname === '익명')
+      .sort((a, b) => (a.createdAt?.toMillis?.() || Date.now()) - (b.createdAt?.toMillis?.() || Date.now()));
+    const uniqueIdentifiers = Array.from(new Set(anonymousReviews.map(r => r.visitorId || r.ip || r.id)));
+    const userIndex = uniqueIdentifiers.indexOf(review.visitorId || review.ip || review.id);
+    return `익명${userIndex + 1}`;
+  };
+
+  const displayNickname = getNickname();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const renderContentWithEmbeds = (content: string) => {
-    const youtubeRegex = /(?:youtu\.be\/|youtube\.com\/watch\?v=)([a-zA-Z0-9_-]+)/;
-    const twitterRegex = /(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/;
-
-    const youtubeMatch = content.match(youtubeRegex);
-    const twitterMatch = content.match(twitterRegex);
-
-    if (!youtubeMatch && !twitterMatch) {
-      return <p className="text-sm text-gray-600 whitespace-pre-wrap">{content}</p>;
-    }
+    let processedContent = content.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>').replace(/\*(.*?)\*/g, '<i>$1</i>');
+    const urlRegex = /(https?:\/\/[^\s<]+)/g;
+    const parts = processedContent.split(urlRegex);
 
     return (
-      <div className="space-y-3">
-        <p className="text-sm text-gray-600 whitespace-pre-wrap">{content}</p>
-        {youtubeMatch && (
-          <div className="rounded-xl overflow-hidden border border-gray-100 shadow-sm max-w-sm">
-            <iframe 
-              src={`https://www.youtube.com/embed/${youtubeMatch[1]}`}
-              className="w-full aspect-video"
-              allowFullScreen
-            />
-          </div>
-        )}
-        {twitterMatch && (
-          <div className="max-w-sm overflow-hidden rounded-xl border border-gray-100 shadow-sm bg-white p-2 flex flex-col items-center">
-            <Tweet id={twitterMatch[1]} />
-            <p className="text-[10px] text-gray-400 mt-1 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
-          </div>
-        )}
+      <div className="text-sm text-gray-600 whitespace-pre-wrap space-y-2">
+        {parts.map((part, i) => {
+          if (part.match(urlRegex)) {
+            const youtubeRegex = /(?:youtu\.be\/|youtube\.com\/watch\?v=)([a-zA-Z0-9_-]+)/;
+            const twitterRegex = /(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/;
+            
+            const ytMatch = part.match(youtubeRegex);
+            if (ytMatch) {
+              return (
+                <div key={i} className="rounded-xl overflow-hidden border border-gray-100 shadow-sm max-w-sm my-2">
+                  <iframe 
+                    src={`https://www.youtube.com/embed/${ytMatch[1]}`}
+                    className="w-full aspect-video"
+                    allowFullScreen
+                  />
+                </div>
+              );
+            }
+            
+            const twMatch = part.match(twitterRegex);
+            if (twMatch) {
+              return (
+                <div key={i} className="max-w-sm overflow-hidden rounded-xl border border-gray-100 shadow-sm bg-white p-2 flex flex-col items-center my-2">
+                  <Tweet id={twMatch[1]} />
+                  <p className="text-[10px] text-gray-400 mt-1 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
+                </div>
+              );
+            }
+            
+            return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline break-all">{part}</a>;
+          }
+
+          return (
+            <div key={i} className="inline" dangerouslySetInnerHTML={{ __html: part }} />
+          );
+        })}
       </div>
     );
   };
@@ -3183,7 +4251,9 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
   const handleReply = (comment: Comment) => {
     setReplyTo(comment);
     
-    const anonymousComments = comments.filter(c => !c.nickname || c.nickname === '익명');
+    const anonymousComments = [...comments]
+      .filter(c => !c.nickname || c.nickname === '익명')
+      .sort((a, b) => (a.createdAt?.toMillis?.() || Date.now()) - (b.createdAt?.toMillis?.() || Date.now()));
     const uniqueIdentifiers = Array.from(new Set(anonymousComments.map(c => c.visitorId || c.ip || c.id)));
     const userIndex = uniqueIdentifiers.indexOf(comment.visitorId || comment.ip || comment.id);
     const nickname = comment.nickname && comment.nickname !== '익명' ? comment.nickname : `익명${userIndex + 1}`;
@@ -3193,7 +4263,12 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
 
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentText.trim() && commentMediaUrls.length === 0) return;
+    if (bannedIps.includes(userIp)) {
+      await customAlert("접근이 차단된 IP입니다. 부적절한 글 작성 및 도배 행위로 인해 차단되었을 수 있습니다.");
+      return;
+    }
+    const cleanContent = commentText.replace(/<[^>]*>?/gm, '').trim();
+    if (!cleanContent && commentMediaUrls.length === 0) return;
     if (commentPassword.length < 4) {
       await customAlert("비밀번호는 4자리 이상이어야 합니다. (작성하신 글을 삭제할 때 필요합니다.)");
       return;
@@ -3201,6 +4276,7 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
     try {
       await addDoc(collection(db, 'comments'), {
         reviewId: review.id,
+        cardId: review.cardId,
         parentId: replyTo?.id || null,
         content: commentText,
         nickname: nickname || '익명',
@@ -3289,16 +4365,23 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
       className="bg-white/80 backdrop-blur-sm border border-gray-100 rounded-3xl overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
     >
       <div className="p-8">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400 font-bold text-lg">
-              {review.nickname[0]}
+        <div className="flex items-start justify-between gap-4 mb-6">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-full bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400 font-bold text-lg shrink-0">
+              {displayNickname[0]}
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <p className="font-bold text-gray-900">{review.nickname}</p>
+            <div className="min-w-0">
+              {isAdmin && review.ip && (
+                <div className="mb-1">
+                  <span className="text-[9px] text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded">
+                    {review.ip}
+                  </span>
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-bold text-gray-900 truncate max-w-[120px] sm:max-w-none">{displayNickname}</p>
                 {review.ratings && (
-                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100">
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100 shrink-0">
                     <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
                     <span className="text-[10px] font-bold text-amber-700">{review.ratings.overall.toFixed(1)}</span>
                   </div>
@@ -3309,7 +4392,16 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
+            {isAdmin && review.ip && !bannedIps.includes(review.ip) && (
+              <button 
+                onClick={() => onBanIp(review.ip)}
+                className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                title="IP 차단"
+              >
+                <Shield className="w-4 h-4" />
+              </button>
+            )}
             <button 
               onClick={onEdit}
               className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-full transition-colors"
@@ -3357,6 +4449,7 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
                     (e.currentTarget as any).touchStartX = touch.clientX;
                   }}
                   onTouchEnd={(e) => {
+                    if (window.visualViewport && window.visualViewport.scale > 1.01) return;
                     const touchStartX = (e.currentTarget as any).touchStartX;
                     if (touchStartX === undefined) return;
                     const touchEndX = e.changedTouches[0].clientX;
@@ -3416,7 +4509,7 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
                       >
                         <ChevronRight className="w-5 h-5" />
                       </button>
-                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
+                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 bg-black/30 px-3 py-1.5 rounded-full backdrop-blur-sm z-10">
                         {review.mediaUrls.map((_, idx) => (
                           <button 
                             key={idx}
@@ -3455,10 +4548,10 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
               onClick={() => onLike(review)}
               className={cn(
                 "flex items-center gap-2 text-xs font-bold transition-all active:scale-125",
-                (user && review.likedBy?.includes(user.uid)) || (!user && review.likedBy?.includes(userIp)) ? "text-red-500" : "text-gray-400 hover:text-red-400"
+                (user && review.likedBy?.includes(user.uid)) || (!user && review.likedBy?.includes(visitorId)) ? "text-red-500" : "text-gray-400 hover:text-red-400"
               )}
             >
-              <Heart className={cn("w-4 h-4", ((user && review.likedBy?.includes(user.uid)) || (!user && review.likedBy?.includes(userIp))) && "fill-current")} />
+              <Heart className={cn("w-4 h-4", ((user && review.likedBy?.includes(user.uid)) || (!user && review.likedBy?.includes(visitorId))) && "fill-current")} />
               좋아요 {review.likes || 0}
             </button>
           </div>
@@ -3520,15 +4613,16 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
                 </div>
                 
                 <div className="relative">
-                  <textarea 
+                  <RichTextEditor
+                    id={`comment-input-${review.id}`}
                     placeholder="댓글을 입력하세요..."
-                    className="w-full bg-white border border-gray-100 rounded-2xl px-4 py-3 text-xs focus:outline-none focus:ring-2 focus:ring-gray-200 min-h-[80px] resize-none pr-12"
                     value={commentText}
-                    onChange={e => setCommentText(e.target.value)}
+                    onChange={val => setCommentText(val)}
+                    className="bg-white border-gray-100 min-h-[80px] text-xs pr-12"
                   />
                   <button 
                     type="submit"
-                    className={cn("absolute bottom-3 right-3 p-2 text-white rounded-xl shadow-md transition-all hover:scale-105 active:scale-95", buttonColor)}
+                    className={cn("absolute bottom-3 right-3 p-2 text-white rounded-xl shadow-md transition-all hover:scale-105 active:scale-95 z-10", buttonColor)}
                   >
                     <Send className="w-4 h-4" />
                   </button>
@@ -3536,22 +4630,36 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
 
                 {commentMediaUrls.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-2">
-                    {commentMediaUrls.map((url, index) => (
-                      <div key={index} className="relative w-12 h-12 rounded-lg overflow-hidden border border-gray-100 group">
-                        {url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) || url.includes('video') ? (
-                          <video playsInline src={url} className="w-full h-full object-cover" />
-                        ) : (
-                          <img src={url} alt={`Preview ${index}`} className="w-full h-full object-cover" />
-                        )}
-                        <button 
-                          type="button"
-                          onClick={() => setCommentMediaUrls(prev => prev.filter((_, i) => i !== index))}
-                          className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
+                    {commentMediaUrls.map((url, index) => {
+                      const twitterMatch = url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/);
+                      const youtubeMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([a-zA-Z0-9_-]+)/);
+                      return (
+                        <div key={index} className="relative w-12 h-12 rounded-lg overflow-hidden border border-gray-100 group bg-gray-50 flex items-center justify-center">
+                          {twitterMatch ? (
+                            <div className="flex flex-col items-center gap-0.5 text-blue-500">
+                              <Twitter className="w-3 h-3" />
+                              <span className="text-[6px] font-bold">트위터</span>
+                            </div>
+                          ) : youtubeMatch ? (
+                            <div className="flex flex-col items-center gap-0.5 text-red-600">
+                              <Youtube className="w-3 h-3" />
+                              <span className="text-[6px] font-bold">유튜브</span>
+                            </div>
+                          ) : url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) || url.includes('video') ? (
+                            <video playsInline src={url} className="w-full h-full object-cover" />
+                          ) : (
+                            <img src={url} alt={`Preview ${index}`} className="w-full h-full object-cover" />
+                          )}
+                          <button 
+                            type="button"
+                            onClick={() => setCommentMediaUrls(prev => prev.filter((_, i) => i !== index))}
+                            className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </form>
@@ -3562,7 +4670,7 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
                 {(() => {
                   const topLevelComments = comments
                     .filter(c => !c.parentId)
-                    .sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0)); // Oldest first for top-level
+                    .sort((a, b) => (a.createdAt?.toMillis() || Date.now()) - (b.createdAt?.toMillis() || Date.now())); // Oldest first, handle nulls as newest
                   
                   const totalPages = Math.ceil(topLevelComments.length / COMMENTS_PER_PAGE);
                   const paginatedTopLevel = topLevelComments.slice((commentsPage - 1) * COMMENTS_PER_PAGE, commentsPage * COMMENTS_PER_PAGE);
@@ -3570,7 +4678,7 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
                   const getDescendants = (parentId: string): Comment[] => {
                     return comments
                       .filter(c => c.parentId === parentId)
-                      .sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0)) // Oldest first for replies
+                      .sort((a, b) => (a.createdAt?.toMillis() || Date.now()) - (b.createdAt?.toMillis() || Date.now())) // Oldest first, handle nulls as newest
                       .flatMap(c => [c, ...getDescendants(c.id)]);
                   };
 
@@ -3584,10 +4692,14 @@ function ReviewCard({ review, accentColor, buttonColor, onDelete, onEdit, onLike
                             key={comment.id} 
                             comment={comment} 
                             comments={comments}
+                            allComments={allCardComments}
                             onDelete={() => handleDeleteComment(comment)}
                             onZoom={(urls, index) => onZoom(urls, index)}
                             renderContentWithEmbeds={renderContentWithEmbeds}
                             onReply={handleReply}
+                            isAdmin={isAdmin}
+                            bannedIps={bannedIps}
+                            onBanIp={onBanIp}
                           />
                         ))}
                       </div>
