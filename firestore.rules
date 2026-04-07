@@ -70,6 +70,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Settings: Everyone can read, only admin can write.
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     // Suggestions: Everyone can create, only admin can read/delete.
     match /suggestions/{suggestionId} {
       allow read, delete: if isAdmin();

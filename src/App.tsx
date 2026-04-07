@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   collection, 
   addDoc, 
@@ -21,11 +22,16 @@ import {
   setDoc,
   arrayUnion,
   arrayRemove,
-  getDocs
+  getDocs,
+  getAggregateFromServer,
+  average,
+  count,
+  getFirestore
 } from 'firebase/firestore';
 // import { ref, getDownloadURL } from 'firebase/storage';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { db, auth, signIn, logOut } from './firebase';
+import firebaseConfig from '../firebase-applet-config.json';
 import { Card, Review, Comment, OperationType, FirestoreErrorInfo } from './types';
 import { 
   Plus, 
@@ -60,7 +66,12 @@ import {
   Twitter,
   Reply,
   Trophy,
-  Search
+  Search,
+  AlertCircle,
+  Sparkles,
+  Info,
+  Edit2,
+  Save
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -163,16 +174,11 @@ export function CustomDialog() {
 }
 
 const ADMIN_EMAIL = "ceunji1218@gmail.com";
-// 🌟 대역폭 폭탄 방지용 마법의 주문 (Cloudinary 자동 최적화)
-const optimizeCloudinaryUrl = (url: string) => {
-  if (!url || typeof url !== 'string') return url;
-  if (!url.includes('res.cloudinary.com')) return url;
-  if (url.includes('/upload/q_auto,f_auto/')) return url;
-  return url.replace('/upload/', '/upload/q_auto,f_auto/');
-};
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null, setError?: (msg: string) => void) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email || undefined,
@@ -190,6 +196,17 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  
+  if (setError) {
+    if (errorMessage.includes('permission-denied') || errorMessage.includes('Missing or insufficient permissions')) {
+      setError(`데이터를 불러오는 데 실패했습니다. (Firebase '승인된 도메인' 확인 필요)\n현재 도메인: ${window.location.hostname}\n상세 에러: ${errorMessage}`);
+    } else if (errorMessage.includes('Quota limit exceeded') || errorMessage.includes('quota-exceeded')) {
+      setError("일일 데이터베이스 사용량을 초과하여 현재 사이트 이용이 제한되었습니다. 내일 다시 시도해 주세요.");
+    } else {
+      setError(`데이터를 불러오는 중 오류가 발생했습니다.\n현재 도메인: ${window.location.hostname}\n상세 에러: ${errorMessage}`);
+    }
+  }
+  
   throw new Error(JSON.stringify(errInfo));
 }
 
@@ -379,6 +396,7 @@ export default function App() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
+  const [firestoreError, setFirestoreError] = useState<string | null>(null);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -388,11 +406,17 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [showHallOfFameModal, setShowHallOfFameModal] = useState(false);
+  const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
+  const [announcementText, setAnnouncementText] = useState('백야 카드는 두 장이 하나의 스토리를 공유하기 때문에, 둘 중 하나의 카드에만 감상평을 남겨도 다른 카드에 자동적으로 동기화됩니다.');
+  const [isEditingAnnouncement, setIsEditingAnnouncement] = useState(false);
+  const [editAnnouncementText, setEditAnnouncementText] = useState('');
+  const [visibleCardCount, setVisibleCardCount] = useState(8);
   const [userIp, setUserIp] = useState<string>('');
   const [visitorId, setVisitorId] = useState<string>('');
   const isAdmin = user?.email === ADMIN_EMAIL;
   
   const scrollPosRef = useRef<number>(0);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const handleSelectCard = (card: Card) => {
     scrollPosRef.current = window.scrollY;
@@ -414,7 +438,56 @@ export default function App() {
   };
 
   const [showStats, setShowStats] = useState(false);
-  const [statsTab, setStatsTab] = useState<'stats' | 'bannedIps' | 'suggestions'>('stats');
+  const [statsTab, setStatsTab] = useState<'stats' | 'bannedIps' | 'suggestions' | 'migration'>('stats');
+  const [migrationStatus, setMigrationStatus] = useState('');
+
+  const handleMigration = async () => {
+    try {
+      setMigrationStatus('마이그레이션 준비 중...');
+      const oldApp = getApps().length > 1 ? getApp('old-app') : initializeApp(firebaseConfig, 'old-app');
+      const oldDb = getFirestore(oldApp, 'ai-studio-dec0890d-db3f-452c-9842-ac5a9d08c9bd');
+
+      setMigrationStatus('기존 카드 데이터 불러오는 중...');
+      const oldCardsSnap = await getDocs(collection(oldDb, 'cards'));
+      setMigrationStatus(`기존 카드 ${oldCardsSnap.docs.length}개 복사 중...`);
+      for (const document of oldCardsSnap.docs) {
+        await setDoc(doc(db, 'cards', document.id), document.data());
+      }
+
+      setMigrationStatus('기존 감상평 및 댓글 데이터 불러오는 중...');
+      const oldReviewsSnap = await getDocs(collection(oldDb, 'reviews'));
+      setMigrationStatus(`기존 감상평 ${oldReviewsSnap.docs.length}개 복사 중...`);
+      for (const document of oldReviewsSnap.docs) {
+        await setDoc(doc(db, 'reviews', document.id), document.data());
+        
+        // Migrate comments for each review
+        const oldCommentsSnap = await getDocs(collection(oldDb, 'reviews', document.id, 'comments'));
+        for (const commentDoc of oldCommentsSnap.docs) {
+          await setDoc(doc(db, 'reviews', document.id, 'comments', commentDoc.id), commentDoc.data());
+        }
+      }
+
+      setMigrationStatus('기타 데이터(차단된 IP, 건의사항) 불러오는 중...');
+      const oldBannedIpsSnap = await getDocs(collection(oldDb, 'banned_ips'));
+      for (const document of oldBannedIpsSnap.docs) {
+        await setDoc(doc(db, 'banned_ips', document.id), document.data());
+      }
+
+      const oldSuggestionsSnap = await getDocs(collection(oldDb, 'suggestions'));
+      for (const document of oldSuggestionsSnap.docs) {
+        await setDoc(doc(db, 'suggestions', document.id), document.data());
+      }
+
+      setMigrationStatus('마이그레이션 완료! 새로고침 해주세요.');
+    } catch (error: any) {
+      console.error(error);
+      if (error.message.includes('Quota limit exceeded')) {
+        setMigrationStatus('실패: 아직 기존 DB의 할당량이 초기화되지 않았습니다. 내일 오후 4시 이후에 다시 시도해주세요.');
+      } else {
+        setMigrationStatus('에러 발생: ' + error.message);
+      }
+    }
+  };
   const [adminStats, setAdminStats] = useState({
     todayReviews: 0,
     totalReviews: 0,
@@ -444,7 +517,7 @@ export default function App() {
     const q = query(collection(db, 'comments'), where('cardId', '==', selectedCard.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setAllCardComments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Comment)));
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'comments'));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'comments', setFirestoreError));
     return () => unsubscribe();
   }, [selectedCard]);
 
@@ -671,13 +744,10 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, 'cards'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const cardList = snapshot.docs.map(doc => {
-        const data = doc.data() as Card;
-        if (data.imageUrls) data.imageUrls = data.imageUrls.map(optimizeCloudinaryUrl);
-        return { id: doc.id, ...data };
-      });
+      const cardList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Card));
       setCards(cardList);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'cards'));
+      setIsInitialLoad(false);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'cards', setFirestoreError));
     return () => unsubscribe();
   }, []);
 
@@ -736,13 +806,9 @@ export default function App() {
       orderBy('createdAt', 'desc')
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const reviewList = snapshot.docs.map(doc => {
-        const data = doc.data() as Review;
-        if (data.mediaUrls) data.mediaUrls = data.mediaUrls.map(optimizeCloudinaryUrl);
-        return { id: doc.id, ...data };
-      });
+      const reviewList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
       setReviews(reviewList);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'reviews'));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'reviews', setFirestoreError));
     return () => unsubscribe();
   }, [selectedCard]);
 
@@ -755,8 +821,58 @@ export default function App() {
     });
   }, [reviews, reviewSortBy]);
 
+  const [hallOfFameStats, setHallOfFameStats] = useState<{
+    bestReviews: {content: string, author: string, cardName: string, cardId: string, likes: number}[];
+    hotReviews: {content: string, author: string, cardName: string, cardId: string, commentCount: number}[];
+  } | null>(null);
+
   useEffect(() => {
-    if ((isAdmin && showStats) || showHallOfFameModal) {
+    if (showHallOfFameModal) {
+      const fetchHallOfFame = async () => {
+        try {
+          const likesQuery = query(collection(db, 'reviews'), orderBy('likes', 'desc'), limit(10));
+          const commentsQuery = query(collection(db, 'reviews'), orderBy('commentCount', 'desc'), limit(10));
+          
+          const [likesSnap, commentsSnap] = await Promise.all([
+            getDocs(likesQuery),
+            getDocs(commentsQuery)
+          ]);
+          
+          const stripHtml = (html: string) => html.replace(/<[^>]*>?/gm, '');
+          
+          const topLiked = likesSnap.docs.map(d => {
+            const r = d.data() as Review;
+            return {
+              content: stripHtml(r.content).substring(0, 20) + '...',
+              author: r.nickname,
+              cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
+              cardId: r.cardId,
+              likes: r.likes || 0
+            };
+          }).filter(r => r.likes > 0).slice(0, 3).sort(() => Math.random() - 0.5);
+          
+          const topCommented = commentsSnap.docs.map(d => {
+            const r = d.data() as Review;
+            return {
+              content: stripHtml(r.content).substring(0, 20) + '...',
+              author: r.nickname,
+              cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
+              cardId: r.cardId,
+              commentCount: r.commentCount || 0
+            };
+          }).filter(r => r.commentCount > 0).slice(0, 3).sort(() => Math.random() - 0.5);
+          
+          setHallOfFameStats({ bestReviews: topLiked, hotReviews: topCommented });
+        } catch (error) {
+          console.error('Error fetching hall of fame:', error);
+        }
+      };
+      fetchHallOfFame();
+    }
+  }, [showHallOfFameModal, cards]);
+
+  useEffect(() => {
+    if (isAdmin && showStats) {
       const fetchStats = async () => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -777,7 +893,7 @@ export default function App() {
         const stripHtml = (html: string) => html.replace(/<[^>]*>?/gm, '');
 
         // Top 5 Best Reviews (by likes)
-        const bestReviews = [...validReviews]
+        const topLiked = [...validReviews]
           .sort((a, b) => (b.likes || 0) - (a.likes || 0))
           .slice(0, 5)
           .map(r => ({
@@ -788,7 +904,7 @@ export default function App() {
           }));
 
         // Top 5 HOT Reviews (by comments)
-        const hotReviews = [...validReviews]
+        const topCommented = [...validReviews]
           .sort((a, b) => (b.commentCount || 0) - (a.commentCount || 0))
           .slice(0, 5)
           .map(r => ({
@@ -797,6 +913,9 @@ export default function App() {
             cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
             cardId: r.cardId
           }));
+          
+        const bestReviews = topLiked;
+        const hotReviews = topCommented;
 
         // Top 5 Most Loved Cards (by average rating)
         const cardRatings = cards.map(card => {
@@ -880,7 +999,32 @@ export default function App() {
       };
       fetchStats();
     }
-  }, [isAdmin, showStats, showHallOfFameModal, cards]);
+  }, [isAdmin, showStats, cards]);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'announcement'), (docSnap) => {
+      if (docSnap.exists()) {
+        setAnnouncementText(docSnap.data().content);
+      }
+    }, (error) => {
+      console.error("Error fetching announcement:", error);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleSaveAnnouncement = async () => {
+    if (!isAdmin) return;
+    try {
+      await setDoc(doc(db, 'settings', 'announcement'), {
+        content: editAnnouncementText
+      }, { merge: true });
+      setIsEditingAnnouncement(false);
+      await customAlert('안내사항이 성공적으로 저장되었습니다.');
+    } catch (error) {
+      console.error("Error saving announcement:", error);
+      await customAlert('안내사항 저장 중 오류가 발생했습니다.');
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'bannedIps'), (snapshot) => {
@@ -1450,6 +1594,25 @@ export default function App() {
     }
   })();
 
+  useEffect(() => {
+    setVisibleCardCount(8);
+  }, [activeTab, rarityFilter, sortBy, searchQuery]);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisibleCardCount((prev) => prev + 8);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    if (loadMoreRef.current) {
+      observer.observe(loadMoreRef.current);
+    }
+    return () => observer.disconnect();
+  }, [filteredCards.length]);
+
   const getThemeColor = (char: string) => {
     switch(char) {
       case '심성훈': return 'bg-[#F4F0F8]'; // Soft Lavender
@@ -1484,38 +1647,46 @@ export default function App() {
   };
 
   useEffect(() => {
-    const q = query(collection(db, 'reviews'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const allReviews = snapshot.docs.map(d => d.data() as Review);
+    const fetchAverages = async () => {
       const averages: {[key: string]: {overall: number, story: number, directing: number, count: number}} = {};
       
-      cards.forEach(card => {
-        const linkedIds = getLinkedCardIds(card.id, cards);
-        const cardReviews = allReviews.filter(r => linkedIds.includes(r.cardId));
-        
-        const count = cardReviews.length;
-        const overallCount = cardReviews.filter(r => r.ratings && r.ratings.overall > 0).length;
-        const storyCount = cardReviews.filter(r => r.ratings && r.ratings.story > 0).length;
-        const directingCount = cardReviews.filter(r => r.ratings && r.ratings.directing > 0).length;
-
-        let overall = 0, story = 0, directing = 0;
-        
-        if (overallCount > 0) {
-          overall = cardReviews.reduce((sum, r) => sum + (r.ratings?.overall || 0), 0) / overallCount;
-        }
-        if (storyCount > 0) {
-          story = cardReviews.reduce((sum, r) => sum + (r.ratings?.story || 0), 0) / storyCount;
-        }
-        if (directingCount > 0) {
-          directing = cardReviews.reduce((sum, r) => sum + (r.ratings?.directing || 0), 0) / directingCount;
-        }
-
-        averages[card.id] = { overall, story, directing, count };
-      });
-      
+      // Fetch averages in chunks to avoid overwhelming the network
+      const chunkSize = 10;
+      for (let i = 0; i < cards.length; i += chunkSize) {
+        const chunk = cards.slice(i, i + chunkSize);
+        await Promise.all(chunk.map(async (card) => {
+          try {
+            const linkedIds = getLinkedCardIds(card.id, cards);
+            const q = query(
+              collection(db, 'reviews'), 
+              where('cardId', 'in', linkedIds)
+            );
+            
+            const snapshot = await getAggregateFromServer(q, {
+              overallAvg: average('ratings.overall'),
+              storyAvg: average('ratings.story'),
+              directingAvg: average('ratings.directing'),
+              totalCount: count()
+            });
+            
+            averages[card.id] = {
+              overall: snapshot.data().overallAvg || 0,
+              story: snapshot.data().storyAvg || 0,
+              directing: snapshot.data().directingAvg || 0,
+              count: snapshot.data().totalCount || 0
+            };
+          } catch (error) {
+            console.error(`Error fetching average for card ${card.id}:`, error);
+            averages[card.id] = { overall: 0, story: 0, directing: 0, count: 0 };
+          }
+        }));
+      }
       setCardAverages(averages);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'reviews'));
-    return () => unsubscribe();
+    };
+    
+    if (cards.length > 0) {
+      fetchAverages();
+    }
   }, [cards]);
 
   if (loading) {
@@ -1548,8 +1719,49 @@ export default function App() {
           <div className="flex flex-col items-center gap-2">
             <h2 className="text-lg font-bold text-gray-900 tracking-widest uppercase">Love and Deepspace</h2>
             <p className="text-xs text-gray-500 font-medium tracking-widest uppercase animate-pulse">Loading Archive...</p>
+            {firestoreError && (
+              <p className="text-red-500 text-[10px] font-bold max-w-xs text-center mt-4 leading-relaxed">
+                {firestoreError}
+              </p>
+            )}
           </div>
         </motion.div>
+      </div>
+    );
+  }
+
+  if (firestoreError && cards.length === 0) {
+    return (
+      <div className="min-h-screen bg-[#f8f9fa] flex flex-col items-center justify-center p-6">
+        <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl border border-red-100 max-w-lg w-full text-center space-y-8">
+          <div className="w-20 h-20 bg-red-50 rounded-3xl flex items-center justify-center mx-auto text-red-500 shadow-inner">
+            <AlertCircle className="w-10 h-10" />
+          </div>
+          <div className="space-y-4">
+            <h2 className="text-2xl font-black text-gray-900 tracking-tight">데이터를 불러올 수 없습니다</h2>
+            <div className="bg-red-50/50 p-6 rounded-2xl border border-red-100 text-left">
+              <p className="text-xs text-red-600 font-bold mb-2 uppercase tracking-widest">에러 상세 내용</p>
+              <p className="text-sm text-red-500 leading-relaxed whitespace-pre-wrap font-medium">
+                {firestoreError}
+              </p>
+            </div>
+            <div className="p-5 bg-gray-50 rounded-2xl border border-gray-100 text-left">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">현재 접속 도메인 (Firebase 등록 필요)</p>
+              <code className="text-xs text-gray-700 break-all font-mono bg-white px-2 py-1 rounded border border-gray-200 block">
+                {window.location.hostname}
+              </code>
+            </div>
+            <p className="text-xs text-gray-400 leading-relaxed px-4">
+              위의 도메인이 Firebase 콘솔의 <span className="font-bold text-gray-600">Authentication &gt; Settings &gt; Authorized domains</span>에 정확히 등록되어 있는지 다시 한번 확인해 주세요.
+            </p>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full py-5 bg-gray-900 text-white font-bold rounded-2xl hover:bg-gray-800 transition-all shadow-lg shadow-gray-200 cursor-pointer text-lg"
+          >
+            페이지 새로고침
+          </button>
+        </div>
       </div>
     );
   }
@@ -1797,13 +2009,22 @@ export default function App() {
                 <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               </div>
             </div>
-            <button
-              onClick={() => setShowHallOfFameModal(true)}
-              className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600 flex items-center gap-2 text-xs font-bold cursor-pointer shrink-0"
-            >
-              <Trophy className="w-5 h-5 text-amber-500" />
-              <span className="hidden sm:inline">명예의 전당</span>
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowAnnouncementModal(true)}
+                className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600 flex items-center gap-2 text-xs font-bold cursor-pointer shrink-0"
+              >
+                <Info className="w-5 h-5 text-blue-500" />
+                <span className="hidden sm:inline">안내</span>
+              </button>
+              <button
+                onClick={() => setShowHallOfFameModal(true)}
+                className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600 flex items-center gap-2 text-xs font-bold cursor-pointer shrink-0"
+              >
+                <Sparkles className="w-5 h-5 text-yellow-500" />
+                <span className="hidden sm:inline">화제의 감상평</span>
+              </button>
+            </div>
           </div>
         )}
         {selectedCard && (
@@ -1849,11 +2070,18 @@ export default function App() {
                 </div>
                 <div className="flex gap-2">
                   <button
+                    onClick={() => setShowAnnouncementModal(true)}
+                    className="hidden lg:flex items-center gap-1.5 bg-white/50 border border-gray-200 px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-white transition-colors focus:outline-none cursor-pointer"
+                  >
+                    <Info className="w-3.5 h-3.5 text-blue-500" />
+                    <span className="hidden sm:inline">안내</span>
+                  </button>
+                  <button
                     onClick={() => setShowHallOfFameModal(true)}
                     className="hidden lg:flex items-center gap-1.5 bg-white/50 border border-gray-200 px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-white transition-colors focus:outline-none cursor-pointer"
                   >
-                    <Trophy className="w-3.5 h-3.5 text-amber-500" />
-                    <span className="hidden sm:inline">명예의 전당</span>
+                    <Sparkles className="w-3.5 h-3.5 text-yellow-500" />
+                    <span className="hidden sm:inline">화제의 감상평</span>
                   </button>
                   <button
                     onClick={() => setShowRulesModal(true)}
@@ -1933,7 +2161,7 @@ export default function App() {
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
                       <AnimatePresence mode="popLayout">
-                        {filteredCards.map((card) => (
+                        {filteredCards.slice(0, visibleCardCount).map((card) => (
                           <CardItem 
                             key={card.id} 
                             card={card} 
@@ -1942,6 +2170,11 @@ export default function App() {
                           />
                         ))}
                       </AnimatePresence>
+                    </div>
+                  )}
+                  {visibleCardCount < filteredCards.length && (
+                    <div ref={loadMoreRef} className="h-20 flex items-center justify-center">
+                      <Loader2 className="w-6 h-6 text-gray-400 animate-spin" />
                     </div>
                   )}
                 </div>
@@ -3115,7 +3348,72 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Hall of Fame Modal */}
+      {/* Announcement Modal */}
+      <AnimatePresence>
+        {showAnnouncementModal && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAnnouncementModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
+                    <Info className="w-5 h-5 text-blue-600" />
+                  </div>
+                  <h2 className="text-xl font-bold text-gray-900">안내사항</h2>
+                </div>
+                <button onClick={() => setShowAnnouncementModal(false)} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto">
+                {isAdmin && isEditingAnnouncement ? (
+                  <div className="space-y-4">
+                    <textarea
+                      value={editAnnouncementText}
+                      onChange={(e) => setEditAnnouncementText(e.target.value)}
+                      className="w-full h-40 p-4 border border-gray-200 rounded-xl text-sm resize-none focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => setIsEditingAnnouncement(false)} className="px-4 py-2 text-sm font-bold text-gray-500 hover:bg-gray-100 rounded-xl">취소</button>
+                      <button onClick={handleSaveAnnouncement} className="px-4 py-2 text-sm font-bold text-white bg-blue-500 hover:bg-blue-600 rounded-xl flex items-center gap-2">
+                        <Save className="w-4 h-4" /> 저장
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100">
+                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                        {announcementText}
+                      </p>
+                    </div>
+                    {isAdmin && (
+                      <div className="flex justify-end">
+                        <button onClick={() => { setEditAnnouncementText(announcementText); setIsEditingAnnouncement(true); }} className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-gray-500 hover:bg-gray-100 rounded-xl">
+                          <Edit2 className="w-4 h-4" /> 수정하기
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Hot Reviews Modal */}
       <AnimatePresence>
         {showHallOfFameModal && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6">
@@ -3134,12 +3432,12 @@ export default function App() {
             >
               <div className="p-6 border-b border-gray-100 bg-white sticky top-0 z-10 flex justify-between items-center">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm bg-gradient-to-br from-amber-400 to-amber-600">
-                    <Trophy className="w-5 h-5" />
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm bg-gradient-to-br from-yellow-400 to-yellow-600">
+                    <Sparkles className="w-5 h-5" />
                   </div>
                   <div>
-                    <h2 className="text-xl font-bold text-gray-900">명예의 전당</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">가장 사랑받는 카드와 감상평들</p>
+                    <h2 className="text-xl font-bold text-gray-900">화제의 감상평</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">유저들의 반응이 뜨거운 감상평 모음</p>
                   </div>
                 </div>
                 <button 
@@ -3157,10 +3455,10 @@ export default function App() {
                     <div className="w-6 h-6 rounded-lg bg-amber-100 flex items-center justify-center text-amber-600">
                       <Heart className="w-3.5 h-3.5" />
                     </div>
-                    베스트 감상평 <span className="text-xs font-bold text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full">TOP 3</span>
+                    베스트 감상평
                   </h3>
                   <div className="space-y-3">
-                    {adminStats.bestReviews.slice(0, 3).map((r, i) => {
+                    {hallOfFameStats?.bestReviews.map((r, i) => {
                       const card = cards.find(c => c.name === r.cardName);
                       return (
                         <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
@@ -3181,7 +3479,7 @@ export default function App() {
                         </div>
                       );
                     })}
-                    {adminStats.bestReviews.length === 0 && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
+                    {(!hallOfFameStats || hallOfFameStats.bestReviews.length === 0) && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
                   </div>
                 </div>
 
@@ -3191,10 +3489,10 @@ export default function App() {
                     <div className="w-6 h-6 rounded-lg bg-rose-100 flex items-center justify-center text-rose-600">
                       <MessageCircle className="w-3.5 h-3.5" />
                     </div>
-                    HOT 감상평 <span className="text-xs font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full">TOP 3</span>
+                    HOT 감상평
                   </h3>
                   <div className="space-y-3">
-                    {adminStats.hotReviews.slice(0, 3).map((r, i) => {
+                    {hallOfFameStats?.hotReviews.map((r, i) => {
                       const card = cards.find(c => c.name === r.cardName);
                       return (
                         <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
@@ -3215,44 +3513,7 @@ export default function App() {
                         </div>
                       );
                     })}
-                    {adminStats.hotReviews.length === 0 && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
-                  </div>
-                </div>
-
-                {/* Most Loved Cards */}
-                <div>
-                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
-                    <div className="w-6 h-6 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600">
-                      <Star className="w-3.5 h-3.5" />
-                    </div>
-                    가장 사랑받는 카드 <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full">TOP 3</span>
-                  </h3>
-                  <div className="space-y-3">
-                    {adminStats.mostLovedCards.slice(0, 3).map((c, i) => {
-                      const card = cards.find(card => card.name === c.name);
-                      return (
-                        <div key={i} className="flex items-center justify-between bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                          <button 
-                            onClick={() => {
-                              if (card) {
-                                handleSelectCard(card);
-                                setShowHallOfFameModal(false);
-                              }
-                            }}
-                            className="text-sm font-bold text-gray-800 hover:text-indigo-600 transition-colors cursor-pointer flex items-center gap-1"
-                          >
-                            {card && <span className="text-indigo-600/80 text-xs">{card.character}</span>}
-                            {card && <span className="text-gray-300 mx-1">|</span>}
-                            {c.name} <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
-                          <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-100">
-                            <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                            <span className="text-xs font-bold text-gray-700">{c.avg.toFixed(1)}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {adminStats.mostLovedCards.length === 0 && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
+                    {(!hallOfFameStats || hallOfFameStats.hotReviews.length === 0) && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
                   </div>
                 </div>
               </div>
@@ -3303,6 +3564,12 @@ export default function App() {
                         className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'suggestions' ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600")}
                       >
                         건의사항
+                      </button>
+                      <button
+                        onClick={() => setStatsTab('migration')}
+                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'migration' ? "border-rose-600 text-rose-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                      >
+                        데이터 마이그레이션
                       </button>
                     </div>
                   </div>
@@ -3537,6 +3804,32 @@ export default function App() {
                         </table>
                       </div>
                     )}
+                  </div>
+                ) : statsTab === 'migration' ? (
+                  <div className="space-y-6">
+                    <div className="bg-rose-50 border border-rose-200 rounded-3xl p-6">
+                      <h3 className="text-lg font-bold text-rose-800 mb-2 flex items-center gap-2">
+                        <AlertCircle className="w-5 h-5" /> 데이터 마이그레이션 도구
+                      </h3>
+                      <p className="text-sm text-rose-700 leading-relaxed mb-4">
+                        이 도구는 기존 데이터베이스(ai-studio-...)에 있는 카드와 감상평 데이터를 현재 연결된 기본 데이터베이스로 복사합니다.<br/>
+                        <strong>주의:</strong> 기존 데이터베이스의 할당량이 초과된 상태라면 내일 오후 4시 이후에 실행해야 성공합니다.
+                      </p>
+                      <div className="flex flex-col gap-3">
+                        <button
+                          onClick={handleMigration}
+                          disabled={migrationStatus.includes('중...')}
+                          className="px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-sm transition-colors disabled:opacity-50"
+                        >
+                          마이그레이션 시작 (기존 DB -&gt; 새 DB)
+                        </button>
+                        {migrationStatus && (
+                          <div className="p-4 bg-white rounded-xl border border-rose-100 text-sm font-medium text-gray-800">
+                            {migrationStatus}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -4367,7 +4660,7 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const commentList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Comment));
       setComments(commentList);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'comments'));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'comments', setFirestoreError));
     return () => unsubscribe();
   }, [review.id]);
 
