@@ -23,8 +23,6 @@ import {
   arrayUnion,
   arrayRemove,
   getDocs,
-  getAggregateFromServer,
-  average,
   count,
   getFirestore
 } from 'firebase/firestore';
@@ -174,13 +172,6 @@ export function CustomDialog() {
 }
 
 const ADMIN_EMAIL = "ceunji1218@gmail.com";
-// 🌟 대역폭 폭탄 방지용 마법의 주문 (Cloudinary 자동 최적화)
-const optimizeCloudinaryUrl = (url: string) => {
-  if (!url || typeof url !== 'string') return url;
-  if (!url.includes('res.cloudinary.com')) return url;
-  if (url.includes('/upload/q_auto,f_auto/')) return url;
-  return url.replace('/upload/', '/upload/q_auto,f_auto/');
-};
 
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null, setError?: (msg: string) => void) {
   const errorMessage = error instanceof Error ? error.message : String(error);
@@ -451,8 +442,7 @@ export default function App() {
   const handleMigration = async () => {
     try {
       setMigrationStatus('마이그레이션 준비 중...');
-      const oldApp = getApps().length > 1 ? getApp('old-app') : initializeApp(firebaseConfig, 'old-app');
-      const oldDb = getFirestore(oldApp, 'ai-studio-dec0890d-db3f-452c-9842-ac5a9d08c9bd');
+      const oldDb = getFirestore(db.app, 'ai-studio-dec0890d-db3f-452c-9842-ac5a9d08c9bd');
 
       setMigrationStatus('기존 카드 데이터 불러오는 중...');
       const oldCardsSnap = await getDocs(collection(oldDb, 'cards'));
@@ -461,23 +451,24 @@ export default function App() {
         await setDoc(doc(db, 'cards', document.id), document.data());
       }
 
-      setMigrationStatus('기존 감상평 및 댓글 데이터 불러오는 중...');
+      setMigrationStatus('기존 감상평 데이터 불러오는 중...');
       const oldReviewsSnap = await getDocs(collection(oldDb, 'reviews'));
       setMigrationStatus(`기존 감상평 ${oldReviewsSnap.docs.length}개 복사 중...`);
       for (const document of oldReviewsSnap.docs) {
         await setDoc(doc(db, 'reviews', document.id), document.data());
-        
-        // Migrate comments for each review
-        const oldCommentsSnap = await getDocs(collection(oldDb, 'reviews', document.id, 'comments'));
-        for (const commentDoc of oldCommentsSnap.docs) {
-          await setDoc(doc(db, 'reviews', document.id, 'comments', commentDoc.id), commentDoc.data());
-        }
+      }
+
+      setMigrationStatus('기존 댓글 데이터 불러오는 중...');
+      const oldCommentsSnap = await getDocs(collection(oldDb, 'comments'));
+      setMigrationStatus(`기존 댓글 ${oldCommentsSnap.docs.length}개 복사 중...`);
+      for (const document of oldCommentsSnap.docs) {
+        await setDoc(doc(db, 'comments', document.id), document.data());
       }
 
       setMigrationStatus('기타 데이터(차단된 IP, 건의사항) 불러오는 중...');
-      const oldBannedIpsSnap = await getDocs(collection(oldDb, 'banned_ips'));
+      const oldBannedIpsSnap = await getDocs(collection(oldDb, 'bannedIps'));
       for (const document of oldBannedIpsSnap.docs) {
-        await setDoc(doc(db, 'banned_ips', document.id), document.data());
+        await setDoc(doc(db, 'bannedIps', document.id), document.data());
       }
 
       const oldSuggestionsSnap = await getDocs(collection(oldDb, 'suggestions'));
@@ -751,11 +742,7 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, 'cards'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const cardList = snapshot.docs.map(doc => {
-        const data = doc.data() as Card;
-        if (data.imageUrls) data.imageUrls = data.imageUrls.map(optimizeCloudinaryUrl);
-        return { id: doc.id, ...data };
-      });
+      const cardList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Card));
       setCards(cardList);
       setIsInitialLoad(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'cards', setFirestoreError));
@@ -817,11 +804,7 @@ export default function App() {
       orderBy('createdAt', 'desc')
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const reviewList = snapshot.docs.map(doc => {
-        const data = doc.data() as Review;
-        if (data.mediaUrls) data.mediaUrls = data.mediaUrls.map(optimizeCloudinaryUrl);
-        return { id: doc.id, ...data };
-      });
+      const reviewList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
       setReviews(reviewList);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'reviews', setFirestoreError));
     return () => unsubscribe();
@@ -1663,40 +1646,40 @@ export default function App() {
 
   useEffect(() => {
     const fetchAverages = async () => {
-      const averages: {[key: string]: {overall: number, story: number, directing: number, count: number}} = {};
-      
-      // Fetch averages in chunks to avoid overwhelming the network
-      const chunkSize = 10;
-      for (let i = 0; i < cards.length; i += chunkSize) {
-        const chunk = cards.slice(i, i + chunkSize);
-        await Promise.all(chunk.map(async (card) => {
-          try {
-            const linkedIds = getLinkedCardIds(card.id, cards);
-            const q = query(
-              collection(db, 'reviews'), 
-              where('cardId', 'in', linkedIds)
-            );
+      try {
+        const reviewsSnapshot = await getDocs(collection(db, 'reviews'));
+        const allReviewsData = reviewsSnapshot.docs.map(doc => doc.data() as Review);
+        
+        const averages: {[key: string]: {overall: number, story: number, directing: number, count: number}} = {};
+        
+        cards.forEach(card => {
+          const linkedIds = getLinkedCardIds(card.id, cards);
+          const cardReviews = allReviewsData.filter(r => linkedIds.includes(r.cardId));
+          const ratedReviews = cardReviews.filter(r => r.ratings?.overall);
+          
+          let overall = 0, story = 0, directing = 0, count = ratedReviews.length;
+          
+          if (count > 0) {
+            overall = ratedReviews.reduce((sum, r) => sum + (r.ratings?.overall || 0), 0) / count;
             
-            const snapshot = await getAggregateFromServer(q, {
-              overallAvg: average('ratings.overall'),
-              storyAvg: average('ratings.story'),
-              directingAvg: average('ratings.directing'),
-              totalCount: count()
-            });
+            const storyReviews = ratedReviews.filter(r => r.ratings?.story && r.ratings.story > 0);
+            if (storyReviews.length > 0) {
+              story = storyReviews.reduce((sum, r) => sum + (r.ratings?.story || 0), 0) / storyReviews.length;
+            }
             
-            averages[card.id] = {
-              overall: snapshot.data().overallAvg || 0,
-              story: snapshot.data().storyAvg || 0,
-              directing: snapshot.data().directingAvg || 0,
-              count: snapshot.data().totalCount || 0
-            };
-          } catch (error) {
-            console.error(`Error fetching average for card ${card.id}:`, error);
-            averages[card.id] = { overall: 0, story: 0, directing: 0, count: 0 };
+            const directingReviews = ratedReviews.filter(r => r.ratings?.directing && r.ratings.directing > 0);
+            if (directingReviews.length > 0) {
+              directing = directingReviews.reduce((sum, r) => sum + (r.ratings?.directing || 0), 0) / directingReviews.length;
+            }
           }
-        }));
+          
+          averages[card.id] = { overall, story, directing, count };
+        });
+        
+        setCardAverages(averages);
+      } catch (error) {
+        console.error("Error fetching reviews for averages:", error);
       }
-      setCardAverages(averages);
     };
     
     if (cards.length > 0) {

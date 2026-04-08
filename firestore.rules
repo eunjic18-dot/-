@@ -11,6 +11,11 @@ service cloud.firestore {
         (request.auth.token.email == "ceunji1218@gmail.com" && request.auth.token.email_verified == true);
     }
 
+    // Blanket rule to allow admin to do anything (crucial for migration)
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+
     function isValidCard(data) {
       return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.attribute in ["공격", "방어", "체력"] &&
@@ -45,8 +50,8 @@ service cloud.firestore {
     // Reviews: Everyone can read, create, update, delete.
     match /reviews/{reviewId} {
       allow read: if true;
-      allow create: if isValidReview(request.resource.data);
-      allow update: if isValidReview(request.resource.data) || 
+      allow create: if isAdmin() || isValidReview(request.resource.data);
+      allow update: if isAdmin() || isValidReview(request.resource.data) || 
                       (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'likedBy']));
       allow delete: if true;
     }
@@ -54,7 +59,7 @@ service cloud.firestore {
     // Comments: Everyone can read, create, update, delete.
     match /comments/{commentId} {
       allow read: if true;
-      allow create, update: if isValidComment(request.resource.data);
+      allow create, update: if isAdmin() || isValidComment(request.resource.data);
       allow delete: if true;
     }
 
