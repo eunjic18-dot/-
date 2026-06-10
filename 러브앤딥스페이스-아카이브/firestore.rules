@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "ceunji1218@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    // Blanket rule to allow admin to do anything (crucial for migration)
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+
+    function isValidCard(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.attribute in ["공격", "방어", "체력"] &&
+             data.color in ["레드", "블루", "골드", "그린", "퍼플", "핑크", "빨강", "파랑", "노랑", "초록", "보라", "분홍"] &&
+             data.type in ["단독", "단체", "배포", "상시", "비밀 약속", "주년 기념 배포", "별의 나침반"] &&
+             data.character in ["심성훈", "이서언", "기욱", "진운", "하우주"] &&
+             data.category in ["백야", "월광"] &&
+             (!('releaseDate' in data) || (data.releaseDate is string && data.releaseDate.size() <= 20)) &&
+             (!('rarity' in data) || (data.rarity in [4, 5])) &&
+             (!('linkedCardId' in data) || (data.linkedCardId == null || data.linkedCardId is string));
+    }
+
+    function isValidReview(data) {
+      return data.cardId is string &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 5000 &&
+             data.nickname is string && data.nickname.size() > 0 && data.nickname.size() < 50;
+    }
+
+    function isValidComment(data) {
+      return data.reviewId is string &&
+             data.content is string && data.content.size() < 1000 &&
+             data.nickname is string && data.nickname.size() > 0 && data.nickname.size() < 50;
+    }
+
+    // Cards: Admin only can create/update/delete. Everyone can read.
+    match /cards/{cardId} {
+      allow read: if true;
+      allow create, update: if isAdmin() && isValidCard(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Reviews: Everyone can read, create, update, delete.
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAdmin() || isValidReview(request.resource.data);
+      allow update: if isAdmin() || isValidReview(request.resource.data) || 
+                      (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'likedBy']));
+      allow delete: if true;
+    }
+
+    // Comments: Everyone can read, create, update, delete.
+    match /comments/{commentId} {
+      allow read: if true;
+      allow create, update: if isAdmin() || isValidComment(request.resource.data);
+      allow delete: if true;
+    }
+
+    // Stats: Everyone can increment visits, only admin can read.
+    match /stats/{statId} {
+      allow read: if isAdmin();
+      allow create, update: if true;
+    }
+
+    // Banned IPs: Everyone can read, only admin can write.
+    match /bannedIps/{ip} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Settings: Everyone can read, only admin can write.
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Suggestions: Everyone can create, only admin can read/delete.
+    match /suggestions/{suggestionId} {
+      allow read, delete: if isAdmin();
+      allow create: if request.resource.data.content is string && request.resource.data.content.size() > 0 && request.resource.data.content.size() < 5000;
+      allow update: if false;
+    }
+  }
+}

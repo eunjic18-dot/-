@@ -1,0 +1,20 @@
+{
+  "name": "러브앤딥스페이스 아카이브",
+  "short_name": "럽딥아카이브",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/loveanddeepspace/192/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://picsum.photos/seed/loveanddeepspace/512/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
