@@ -74,8 +74,24 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { Tweet } from 'react-tweet';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
+import React, { Component, ReactNode } from 'react';
+
+const TwitterEmbed = ({ id }: { id: string }) => {
+  return (
+    <a 
+      href={`https://twitter.com/i/web/status/${id}`} 
+      target="_blank" 
+      rel="noopener noreferrer"
+      className="flex items-center justify-center p-4 my-2 rounded-xl border border-blue-100 bg-blue-50 text-blue-500 font-bold hover:bg-blue-100 transition-colors w-full"
+    >
+      <svg className="w-5 h-5 mr-2 fill-current" viewBox="0 0 24 24">
+        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.005 4.15H5.059z"/>
+      </svg>
+      X(트위터) 원본 링크로 이동
+    </a>
+  );
+};
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -179,7 +195,6 @@ const optimizeCloudinaryUrl = (url: string) => {
   if (url.includes('/upload/q_auto,f_auto/')) return url;
   return url.replace('/upload/', '/upload/q_auto,f_auto/');
 };
-
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null, setError?: (msg: string) => void) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
@@ -255,6 +270,7 @@ const uploadMedia = async (file: File, pathPrefix: string, onProgress?: (progres
 };
 
 const renderMediaUrl = (url: string) => {
+  if (typeof url !== 'string') return null;
   if (url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/|e\/))([a-zA-Z0-9_-]{11})/)) {
     return (
       <iframe 
@@ -266,7 +282,7 @@ const renderMediaUrl = (url: string) => {
   } else if (url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/)) {
     return (
       <div className="flex flex-col items-center w-full overflow-hidden rounded-2xl">
-        <Tweet id={url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/)?.[1] || ''} />
+        <TwitterEmbed id={url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/)?.[1] || ''} />
         <p className="text-[10px] text-gray-400 mt-2 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
       </div>
     );
@@ -425,6 +441,7 @@ export default function App() {
 
   const handleSelectCard = (card: Card) => {
     scrollPosRef.current = window.scrollY;
+    setCurrentImageIndex(0);
     setSelectedCard(card);
     window.history.pushState({ cardId: card.id }, '', `?cardId=${card.id}`);
     window.scrollTo(0, 0);
@@ -808,11 +825,10 @@ export default function App() {
       setReviews([]);
       return;
     }
-    const linkedIds = getLinkedCardIds(selectedCard.id, cards);
+    const linkedIds = getLinkedCardIds(selectedCard.id, cards).slice(0, 10);
     const q = query(
       collection(db, 'reviews'), 
-      where('cardId', 'in', linkedIds),
-      orderBy('createdAt', 'desc')
+      where('cardId', 'in', linkedIds)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const reviewList = snapshot.docs.map(doc => {
@@ -4254,7 +4270,7 @@ export default function App() {
                       className="w-full max-w-md bg-white rounded-xl overflow-hidden z-50 p-4 flex flex-col items-center"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <Tweet id={twitterMatch[1]} />
+                      <TwitterEmbed id={twitterMatch[1]} />
                       <p className="text-[10px] text-gray-400 mt-2 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
                     </motion.div>
                   );
@@ -4554,7 +4570,7 @@ function CommentItem({ comment, comments, allComments, onDelete, onZoom, renderC
                         />
                       ) : twitterMatch ? (
                         <div className="p-2 bg-white flex flex-col items-center">
-                          <Tweet id={twitterMatch[1]} />
+                          <TwitterEmbed id={twitterMatch[1]} />
                           <p className="text-[10px] text-gray-400 mt-1 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
                         </div>
                       ) : url.includes('video') || url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) ? (
@@ -4647,7 +4663,7 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
             if (twMatch) {
               return (
                 <div key={i} className="max-w-sm overflow-hidden rounded-xl border border-gray-100 shadow-sm bg-white p-2 flex flex-col items-center my-2">
-                  <Tweet id={twMatch[1]} />
+                  <TwitterEmbed id={twMatch[1]} />
                   <p className="text-[10px] text-gray-400 mt-1 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
                 </div>
               );
@@ -4667,13 +4683,13 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
   useEffect(() => {
     const q = query(
       collection(db, 'comments'),
-      where('reviewId', '==', review.id),
-      orderBy('createdAt', 'asc')
+      where('reviewId', '==', review.id)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const commentList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Comment));
+      commentList.sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
       setComments(commentList);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'comments', setFirestoreError));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'comments'));
     return () => unsubscribe();
   }, [review.id]);
 
@@ -4814,7 +4830,7 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
                 {review.ratings && (
                   <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100 shrink-0">
                     <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                    <span className="text-[10px] font-bold text-amber-700">{review.ratings.overall.toFixed(1)}</span>
+                    <span className="text-[10px] font-bold text-amber-700">{Number(review.ratings.overall || 0).toFixed(1)}</span>
                   </div>
                 )}
               </div>
@@ -4908,7 +4924,7 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
                             />
                           ) : twitterMatch ? (
                             <div className="w-full flex flex-col items-center p-4 bg-white rounded-2xl">
-                              <Tweet id={twitterMatch[1]} />
+                              <TwitterEmbed id={twitterMatch[1]} />
                               <p className="text-[10px] text-gray-400 mt-2 px-4 text-center break-keep">* 트위터 정책에 따라 영상이 재생되지 않을 수 있습니다. 원본 링크에서 확인해주세요.</p>
                             </div>
                           ) : url.includes('video') || url.match(/\.(mp4|webm|ogg|mov|m4v|avi|wmv)/i) ? (
@@ -4991,13 +5007,13 @@ function ReviewCard({ review, allReviews, allCardComments, accentColor, buttonCo
               {review.ratings.story > 0 && (
                 <div className="flex items-center gap-1">
                   <span className="text-gray-300">STORY</span>
-                  <span className="text-gray-600">{review.ratings.story.toFixed(1)}</span>
+                  <span className="text-gray-600">{Number(review.ratings.story || 0).toFixed(1)}</span>
                 </div>
               )}
               {review.ratings.directing > 0 && (
                 <div className="flex items-center gap-1">
                   <span className="text-gray-300">DIRECTING</span>
-                  <span className="text-gray-600">{review.ratings.directing.toFixed(1)}</span>
+                  <span className="text-gray-600">{Number(review.ratings.directing || 0).toFixed(1)}</span>
                 </div>
               )}
             </div>
