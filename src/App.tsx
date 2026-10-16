@@ -75,7 +75,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
-import React, { Component, ReactNode } from 'react';
 
 const TwitterEmbed = ({ id }: { id: string }) => {
   return (
@@ -188,13 +187,7 @@ export function CustomDialog() {
 }
 
 const ADMIN_EMAIL = "ceunji1218@gmail.com";
-// 🌟 대역폭 폭탄 방지용 마법의 주문 (Cloudinary 자동 최적화)
-const optimizeCloudinaryUrl = (url: string) => {
-  if (!url || typeof url !== 'string') return url;
-  if (!url.includes('res.cloudinary.com')) return url;
-  if (url.includes('/upload/q_auto,f_auto/')) return url;
-  return url.replace('/upload/', '/upload/q_auto,f_auto/');
-};
+
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null, setError?: (msg: string) => void) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
@@ -426,7 +419,7 @@ export default function App() {
   const [sortBy, setSortBy] = useState<'최신순' | '가나다순' | '출시일순' | '색상순' | '능력치순'>('최신순');
   const [searchQuery, setSearchQuery] = useState('');
   const [showRulesModal, setShowRulesModal] = useState(false);
-  const [showHallOfFameModal, setShowHallOfFameModal] = useState(false);
+  const [showReviewStatsModal, setShowReviewStatsModal] = useState(false);
   const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
   const [announcementText, setAnnouncementText] = useState('백야 카드는 두 장이 하나의 스토리를 공유하기 때문에, 둘 중 하나의 카드에만 감상평을 남겨도 다른 카드에 자동적으로 동기화됩니다.');
   const [isEditingAnnouncement, setIsEditingAnnouncement] = useState(false);
@@ -766,11 +759,7 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, 'cards'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const cardList = snapshot.docs.map(doc => {
-        const data = doc.data() as Card;
-        if (data.imageUrls) data.imageUrls = data.imageUrls.map(optimizeCloudinaryUrl);
-        return { id: doc.id, ...data };
-      });
+      const cardList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Card));
       setCards(cardList);
       setIsInitialLoad(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'cards', setFirestoreError));
@@ -831,11 +820,7 @@ export default function App() {
       where('cardId', 'in', linkedIds)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const reviewList = snapshot.docs.map(doc => {
-        const data = doc.data() as Review;
-        if (data.mediaUrls) data.mediaUrls = data.mediaUrls.map(optimizeCloudinaryUrl);
-        return { id: doc.id, ...data };
-      });
+      const reviewList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
       setReviews(reviewList);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'reviews', setFirestoreError));
     return () => unsubscribe();
@@ -850,55 +835,61 @@ export default function App() {
     });
   }, [reviews, reviewSortBy]);
 
-  const [hallOfFameStats, setHallOfFameStats] = useState<{
-    bestReviews: {content: string, author: string, cardName: string, cardId: string, likes: number}[];
-    hotReviews: {content: string, author: string, cardName: string, cardId: string, commentCount: number}[];
-  } | null>(null);
+  const [reviewStats, setReviewStats] = useState<{
+    todayReviews: number;
+    totalReviews: number;
+  }>({ todayReviews: 0, totalReviews: 0 });
+  const [reviewStatsLoading, setReviewStatsLoading] = useState(false);
+
+  const fetchReviewStats = async () => {
+    setReviewStatsLoading(true);
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const reviewsSnapshot = await getDocs(collection(db, 'reviews'));
+      const allReviews = reviewsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Review));
+      
+      const validReviews = cards.length > 0 
+        ? allReviews.filter(r => cards.some(c => c.id === r.cardId))
+        : allReviews;
+
+      const todayReviews = validReviews.filter(r => {
+        if (!r.createdAt) return false;
+        try {
+          const reviewDate = typeof r.createdAt.toDate === 'function' 
+            ? r.createdAt.toDate() 
+            : new Date(r.createdAt);
+          return reviewDate >= today;
+        } catch {
+          return false;
+        }
+      }).length;
+      
+      const totalReviews = validReviews.length;
+
+      setReviewStats({
+        todayReviews,
+        totalReviews
+      });
+    } catch (error) {
+      console.error('Error fetching review stats:', error);
+    } finally {
+      setReviewStatsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (showHallOfFameModal) {
-      const fetchHallOfFame = async () => {
-        try {
-          const likesQuery = query(collection(db, 'reviews'), orderBy('likes', 'desc'), limit(10));
-          const commentsQuery = query(collection(db, 'reviews'), orderBy('commentCount', 'desc'), limit(10));
-          
-          const [likesSnap, commentsSnap] = await Promise.all([
-            getDocs(likesQuery),
-            getDocs(commentsQuery)
-          ]);
-          
-          const stripHtml = (html: string) => html.replace(/<[^>]*>?/gm, '');
-          
-          const topLiked = likesSnap.docs.map(d => {
-            const r = d.data() as Review;
-            return {
-              content: stripHtml(r.content).substring(0, 20) + '...',
-              author: r.nickname,
-              cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
-              cardId: r.cardId,
-              likes: r.likes || 0
-            };
-          }).filter(r => r.likes > 0).slice(0, 3).sort(() => Math.random() - 0.5);
-          
-          const topCommented = commentsSnap.docs.map(d => {
-            const r = d.data() as Review;
-            return {
-              content: stripHtml(r.content).substring(0, 20) + '...',
-              author: r.nickname,
-              cardName: cards.find(c => c.id === r.cardId)?.name || '알 수 없음',
-              cardId: r.cardId,
-              commentCount: r.commentCount || 0
-            };
-          }).filter(r => r.commentCount > 0).slice(0, 3).sort(() => Math.random() - 0.5);
-          
-          setHallOfFameStats({ bestReviews: topLiked, hotReviews: topCommented });
-        } catch (error) {
-          console.error('Error fetching hall of fame:', error);
-        }
-      };
-      fetchHallOfFame();
+    if (showReviewStatsModal) {
+      fetchReviewStats();
     }
-  }, [showHallOfFameModal, cards]);
+  }, [showReviewStatsModal, cards]);
+
+  useEffect(() => {
+    if (cards.length > 0) {
+      fetchReviewStats();
+    }
+  }, [cards.length]);
 
   useEffect(() => {
     if (isAdmin && showStats) {
@@ -2047,11 +2038,12 @@ export default function App() {
                 <span className="hidden sm:inline">안내</span>
               </button>
               <button
-                onClick={() => setShowHallOfFameModal(true)}
-                className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600 flex items-center gap-2 text-xs font-bold cursor-pointer shrink-0"
+                onClick={() => setShowReviewStatsModal(true)}
+                className="p-2 bg-white rounded-xl border border-gray-200 shadow-sm text-gray-600 flex items-center gap-2 text-xs font-bold cursor-pointer shrink-0 hover:bg-gray-50 transition-colors"
+                title="감상평 현황"
               >
-                <Sparkles className="w-5 h-5 text-yellow-500" />
-                <span className="hidden sm:inline">화제의 감상평</span>
+                <BarChart3 className="w-5 h-5 text-indigo-500" />
+                <span className="hidden sm:inline">감상평 현황</span>
               </button>
             </div>
           </div>
@@ -2106,11 +2098,11 @@ export default function App() {
                     <span className="hidden sm:inline">안내</span>
                   </button>
                   <button
-                    onClick={() => setShowHallOfFameModal(true)}
+                    onClick={() => setShowReviewStatsModal(true)}
                     className="hidden lg:flex items-center gap-1.5 bg-white/50 border border-gray-200 px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-white transition-colors focus:outline-none cursor-pointer"
                   >
-                    <Sparkles className="w-3.5 h-3.5 text-yellow-500" />
-                    <span className="hidden sm:inline">화제의 감상평</span>
+                    <BarChart3 className="w-3.5 h-3.5 text-indigo-500" />
+                    <span className="hidden sm:inline">감상평 현황</span>
                   </button>
                   <button
                     onClick={() => setShowRulesModal(true)}
@@ -3442,109 +3434,68 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Hot Reviews Modal */}
+      {/* Review Stats Modal */}
       <AnimatePresence>
-        {showHallOfFameModal && (
+        {showReviewStatsModal && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowHallOfFameModal(false)}
+              onClick={() => setShowReviewStatsModal(false)}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col"
             >
               <div className="p-6 border-b border-gray-100 bg-white sticky top-0 z-10 flex justify-between items-center">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm bg-gradient-to-br from-yellow-400 to-yellow-600">
-                    <Sparkles className="w-5 h-5" />
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm bg-gradient-to-br from-indigo-500 to-blue-600">
+                    <BarChart3 className="w-5 h-5" />
                   </div>
                   <div>
-                    <h2 className="text-xl font-bold text-gray-900">화제의 감상평</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">유저들의 반응이 뜨거운 감상평 모음</p>
+                    <h2 className="text-xl font-bold text-gray-900">감상평 현황</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">실시간 감상평 등록 및 누적 현황</p>
                   </div>
                 </div>
                 <button 
-                  onClick={() => setShowHallOfFameModal(false)}
+                  onClick={() => setShowReviewStatsModal(false)}
                   className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
                 >
                   <X className="w-6 h-6" />
                 </button>
               </div>
               
-              <div className="p-6 overflow-y-auto space-y-8">
-                {/* Best Reviews */}
-                <div>
-                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
-                    <div className="w-6 h-6 rounded-lg bg-amber-100 flex items-center justify-center text-amber-600">
-                      <Heart className="w-3.5 h-3.5" />
-                    </div>
-                    베스트 감상평
-                  </h3>
-                  <div className="space-y-3">
-                    {hallOfFameStats?.bestReviews.map((r, i) => {
-                      const card = cards.find(c => c.name === r.cardName);
-                      return (
-                        <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.replace(/<[^>]*>?/gm, '').split('\n')[0]}</p>
-                          <button 
-                            onClick={() => {
-                              if (card) {
-                                handleSelectCard(card);
-                                setShowHallOfFameModal(false);
-                              }
-                            }}
-                            className="text-[11px] font-bold text-gray-500 hover:text-amber-600 transition-colors cursor-pointer flex items-center gap-1"
-                          >
-                            {card && <span className="text-amber-600/80">{card.character}</span>}
-                            {card && <span className="text-gray-300 mx-0.5">|</span>}
-                            {r.cardName} <ChevronRight className="w-3 h-3" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                    {(!hallOfFameStats || hallOfFameStats.bestReviews.length === 0) && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
+              <div className="p-6">
+                {reviewStatsLoading && !reviewStats ? (
+                  <div className="flex flex-col items-center justify-center py-10 gap-3 text-gray-400">
+                    <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                    <p className="text-xs">현황을 불러오는 중입니다...</p>
                   </div>
-                </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                    <div className="p-5 sm:p-6 rounded-3xl bg-indigo-50 border border-indigo-100 text-center flex flex-col items-center justify-center shadow-xs">
+                      <p className="text-[11px] sm:text-xs font-bold text-indigo-500 uppercase tracking-wider mb-2">
+                        오늘의 신규 감상평 수
+                      </p>
+                      <p className="text-3xl sm:text-4xl font-extrabold text-indigo-900 tracking-tight">
+                        {reviewStats?.todayReviews ?? 0}
+                      </p>
+                    </div>
 
-                {/* HOT Reviews */}
-                <div>
-                  <h3 className="text-base font-black text-gray-900 tracking-tight leading-tight mb-4 flex items-center gap-2.5">
-                    <div className="w-6 h-6 rounded-lg bg-rose-100 flex items-center justify-center text-rose-600">
-                      <MessageCircle className="w-3.5 h-3.5" />
+                    <div className="p-5 sm:p-6 rounded-3xl bg-blue-50 border border-blue-100 text-center flex flex-col items-center justify-center shadow-xs">
+                      <p className="text-[11px] sm:text-xs font-bold text-blue-500 uppercase tracking-wider mb-2">
+                        누적 감상평 수
+                      </p>
+                      <p className="text-3xl sm:text-4xl font-extrabold text-blue-900 tracking-tight">
+                        {reviewStats?.totalReviews ?? 0}
+                      </p>
                     </div>
-                    HOT 감상평
-                  </h3>
-                  <div className="space-y-3">
-                    {hallOfFameStats?.hotReviews.map((r, i) => {
-                      const card = cards.find(c => c.name === r.cardName);
-                      return (
-                        <div key={i} className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                          <p className="text-sm font-medium text-gray-800 mb-2 line-clamp-2">{r.content.replace(/<[^>]*>?/gm, '').split('\n')[0]}</p>
-                          <button 
-                            onClick={() => {
-                              if (card) {
-                                handleSelectCard(card);
-                                setShowHallOfFameModal(false);
-                              }
-                            }}
-                            className="text-[11px] font-bold text-gray-500 hover:text-rose-600 transition-colors cursor-pointer flex items-center gap-1"
-                          >
-                            {card && <span className="text-rose-600/80">{card.character}</span>}
-                            {card && <span className="text-gray-300 mx-0.5">|</span>}
-                            {r.cardName} <ChevronRight className="w-3 h-3" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                    {(!hallOfFameStats || hallOfFameStats.hotReviews.length === 0) && <p className="text-sm text-gray-400 p-4 text-center bg-gray-50 rounded-2xl">아직 데이터가 없습니다.</p>}
                   </div>
-                </div>
+                )}
               </div>
             </motion.div>
           </div>
@@ -3619,7 +3570,7 @@ export default function App() {
                     {/* Summary Cards */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                       <div className="p-6 rounded-3xl bg-indigo-50 border border-indigo-100 text-center">
-                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">오늘의 신규 감상평</p>
+                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">오늘의 신규 감상평 수</p>
                         <p className="text-3xl font-bold text-indigo-900">{adminStats.todayReviews}</p>
                       </div>
                       <div className="p-6 rounded-3xl bg-blue-50 border border-blue-100 text-center">
