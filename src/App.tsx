@@ -683,7 +683,14 @@ export default function App() {
       else if (ua.includes('Firefox')) browser = 'Firefox';
       else if (ua.includes('Edge')) browser = 'Edge';
       
-      const referrer = document.referrer ? new URL(document.referrer).hostname : 'Direct';
+      let referrer = 'Direct';
+      if (document.referrer) {
+        try {
+          referrer = new URL(document.referrer).hostname;
+        } catch {
+          referrer = 'Direct';
+        }
+      }
       const currentPath = selectedCard ? `card_${selectedCard.id}` : 'home';
 
       const statRef = doc(db, 'stats', today);
