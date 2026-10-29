@@ -11,6 +11,17 @@
     <link rel="manifest" href="/manifest.json" />
     <title>러브앤딥스페이스 아카이브</title>
 
+    <!-- Suppress Vite HMR dev websocket disconnect errors in iframe preview -->
+    <script>
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event.reason;
+        var msg = reason ? (reason.message || String(reason)) : '';
+        if (msg.indexOf('WebSocket') !== -1 || msg.indexOf('websocket') !== -1) {
+          event.preventDefault();
+        }
+      });
+    </script>
+
     <!-- Google Analytics 4 (GA4) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-C9NMM3ZRTH"></script>
     <script>
@@ -25,3 +36,4 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+
