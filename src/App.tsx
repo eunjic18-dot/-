@@ -69,7 +69,17 @@ import {
   Sparkles,
   Info,
   Edit2,
-  Save
+  Save,
+  TrendingUp,
+  Copy,
+  Check,
+  Users,
+  Award,
+  Flame,
+  Clock,
+  Activity,
+  FileText,
+  PieChart
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -453,7 +463,7 @@ export default function App() {
   };
 
   const [showStats, setShowStats] = useState(false);
-  const [statsTab, setStatsTab] = useState<'stats' | 'bannedIps' | 'suggestions' | 'migration'>('stats');
+  const [statsTab, setStatsTab] = useState<'reviewStats' | 'portfolioKpi' | 'bannedIps' | 'suggestions' | 'migration'>('reviewStats');
   const [migrationStatus, setMigrationStatus] = useState('');
 
   const handleMigration = async () => {
@@ -516,8 +526,58 @@ export default function App() {
       topRatedCards: { text: string, cardId: string }[], 
       topReviewedCards: { text: string, cardId: string }[], 
       highestLikedCard: { name: string, avg: number, count: number, maxLikes: number, cardId: string } | null
-    }[]
+    }[],
+    portfolio: {
+      totalEngagements: 0,
+      totalLikes: 0,
+      totalComments: 0,
+      uniqueReviewers: 0,
+      repeatReviewers: 0,
+      repeatRate: 0,
+      avgReviewLength: 0,
+      maxReviewLength: 0,
+      longReviewRatio: 0,
+      photoReviewRatio: 0,
+      inDepthRatio: 0,
+      overallAvgRating: 0,
+      avgStoryRating: 0,
+      avgDirectingRating: 0,
+      ratedReviewsCount: 0,
+      positiveRate: 0,
+      engagementMultiplier: 0,
+      ratingDistribution: [] as { star: number; count: number; pct: number }[],
+      dailyTrends: [] as { date: string; displayDate: string; reviews: number; comments: number; total: number }[],
+      peakDay: null as { date: string; count: number } | null,
+      characterBreakdown: [] as { 
+        character: string; 
+        reviewCount: number; 
+        pct: number; 
+        totalLikes: number; 
+        totalComments: number;
+        avgRating: number; 
+        cardCount: number; 
+        density: number;
+      }[],
+      hourlyDistribution: [] as { hour: number; label: string; count: number; pct: number }[],
+      peakHourRange: '',
+      dayOfWeekDistribution: [] as { day: string; count: number; pct: number }[],
+      weekendPct: 0,
+      weekdayPct: 0,
+      lengthSegments: {
+        short: { count: 0, pct: 0 },
+        medium: { count: 0, pct: 0 },
+        long: { count: 0, pct: 0 }
+      },
+      rarityStats: {
+        ssr: { count: 0, reviews: 0, avgRating: 0 },
+        sr: { count: 0, reviews: 0, avgRating: 0 }
+      }
+    }
   });
+  const [statsTrendDays, setStatsTrendDays] = useState<7 | 14 | 30>(14);
+  const [copiedPortfolioSummary, setCopiedPortfolioSummary] = useState(false);
+  const [hoveredTrendDay, setHoveredTrendDay] = useState<{ date: string; displayDate: string; reviews: number; comments: number; total: number } | null>(null);
+  const [isStatsLoading, setIsStatsLoading] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [allCardComments, setAllCardComments] = useState<Comment[]>([]);
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -1014,6 +1074,268 @@ export default function App() {
           };
         }).filter(stat => stat.topWords.length > 0 || stat.topRatedCards.length > 0);
 
+        // --- PORTFOLIO & ENGAGEMENT METRICS CALCULATION ---
+        const totalLikes = validReviews.reduce((sum, r) => sum + (r.likes || 0), 0);
+        const validComments = allComments.filter(c => cards.some(card => card.id === c.cardId));
+        const totalComments = validComments.length;
+        const totalEngagements = totalReviews + totalComments + totalLikes;
+        const engagementMultiplier = validReviews.length > 0 ? (totalLikes + totalComments) / validReviews.length : 0;
+
+        // User Retention & Repeat Contribution
+        const userReviewCounts = new Map<string, number>();
+        validReviews.forEach(r => {
+          const identifier = r.visitorId || r.ip || (r.nickname && r.nickname !== '익명' ? `nick:${r.nickname}` : null) || r.id;
+          userReviewCounts.set(identifier, (userReviewCounts.get(identifier) || 0) + 1);
+        });
+        const uniqueReviewers = userReviewCounts.size;
+        const repeatReviewers = Array.from(userReviewCounts.values()).filter(count => count >= 2).length;
+        const repeatRate = uniqueReviewers > 0 ? (repeatReviewers / uniqueReviewers) * 100 : 0;
+
+        // Content Quality & In-depth Reviews
+        let totalChars = 0;
+        let maxReviewLength = 0;
+        let shortReviewCount = 0; // < 30 chars
+        let mediumReviewCount = 0; // 30 ~ 99 chars
+        let longReviewCount = 0; // >= 100 chars
+        let photoReviewCount = 0;
+
+        validReviews.forEach(r => {
+          const plain = stripHtml(r.content || '').trim();
+          const len = plain.length;
+          totalChars += len;
+          if (len > maxReviewLength) maxReviewLength = len;
+          if (len < 30) shortReviewCount++;
+          else if (len < 100) mediumReviewCount++;
+          else longReviewCount++;
+
+          if (r.mediaUrls && r.mediaUrls.length > 0) photoReviewCount++;
+        });
+
+        const avgReviewLength = validReviews.length > 0 ? Math.round(totalChars / validReviews.length) : 0;
+        const longReviewRatio = validReviews.length > 0 ? (longReviewCount / validReviews.length) * 100 : 0;
+        const photoReviewRatio = validReviews.length > 0 ? (photoReviewCount / validReviews.length) * 100 : 0;
+        const inDepthCount = validReviews.filter(r => (stripHtml(r.content || '').trim().length >= 80) || (r.mediaUrls && r.mediaUrls.length > 0)).length;
+        const inDepthRatio = validReviews.length > 0 ? (inDepthCount / validReviews.length) * 100 : 0;
+
+        const lengthSegments = {
+          short: {
+            count: shortReviewCount,
+            pct: validReviews.length > 0 ? (shortReviewCount / validReviews.length) * 100 : 0
+          },
+          medium: {
+            count: mediumReviewCount,
+            pct: validReviews.length > 0 ? (mediumReviewCount / validReviews.length) * 100 : 0
+          },
+          long: {
+            count: longReviewCount,
+            pct: validReviews.length > 0 ? (longReviewCount / validReviews.length) * 100 : 0
+          }
+        };
+
+        // Multi-Axis Rating Satisfaction
+        const ratedReviews = validReviews.filter(r => r.ratings?.overall);
+        const overallAvgRating = ratedReviews.length > 0
+          ? ratedReviews.reduce((sum, r) => sum + r.ratings!.overall, 0) / ratedReviews.length
+          : 0;
+
+        const storyRated = validReviews.filter(r => r.ratings?.story);
+        const avgStoryRating = storyRated.length > 0
+          ? storyRated.reduce((sum, r) => sum + r.ratings!.story, 0) / storyRated.length
+          : 0;
+
+        const directingRated = validReviews.filter(r => r.ratings?.directing);
+        const avgDirectingRating = directingRated.length > 0
+          ? directingRated.reduce((sum, r) => sum + r.ratings!.directing, 0) / directingRated.length
+          : 0;
+
+        const positiveRatingsCount = ratedReviews.filter(r => r.ratings!.overall >= 4).length;
+        const positiveRate = ratedReviews.length > 0 ? (positiveRatingsCount / ratedReviews.length) * 100 : 0;
+        const ratingDistribution = [5, 4, 3, 2, 1].map(star => {
+          const count = ratedReviews.filter(r => Math.round(r.ratings!.overall) === star).length;
+          return {
+            star,
+            count,
+            pct: ratedReviews.length > 0 ? (count / ratedReviews.length) * 100 : 0
+          };
+        });
+
+        // 24-Hour Hourly Activity Distribution
+        const hourCounts = new Array(24).fill(0);
+        let totalTimeTracked = 0;
+        const trackDate = (rawDate: any) => {
+          if (!rawDate) return;
+          try {
+            const d = typeof rawDate.toDate === 'function' ? rawDate.toDate() : new Date(rawDate);
+            if (!isNaN(d.getTime())) {
+              hourCounts[d.getHours()]++;
+              totalTimeTracked++;
+            }
+          } catch {}
+        };
+        validReviews.forEach(r => trackDate(r.createdAt));
+        validComments.forEach(c => trackDate(c.createdAt));
+
+        const hourlyDistribution = hourCounts.map((count, hour) => ({
+          hour,
+          label: `${hour}시`,
+          count,
+          pct: totalTimeTracked > 0 ? (count / totalTimeTracked) * 100 : 0
+        }));
+
+        // Peak 3-Hour window
+        let bestHourStart = 0;
+        let maxWindowSum = 0;
+        for (let h = 0; h < 24; h++) {
+          const windowSum = hourCounts[h] + hourCounts[(h + 1) % 24] + hourCounts[(h + 2) % 24];
+          if (windowSum > maxWindowSum) {
+            maxWindowSum = windowSum;
+            bestHourStart = h;
+          }
+        }
+        const bestHourEnd = (bestHourStart + 3) % 24;
+        const peakHourRange = totalTimeTracked > 0 
+          ? `${bestHourStart}:00 ~ ${bestHourEnd}:00` 
+          : '데이터 집계 중';
+
+        // Day of Week Activity
+        const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+        const dayCounts = new Array(7).fill(0);
+        const trackDay = (rawDate: any) => {
+          if (!rawDate) return;
+          try {
+            const d = typeof rawDate.toDate === 'function' ? rawDate.toDate() : new Date(rawDate);
+            if (!isNaN(d.getTime())) {
+              dayCounts[d.getDay()]++;
+            }
+          } catch {}
+        };
+        validReviews.forEach(r => trackDay(r.createdAt));
+        validComments.forEach(c => trackDay(c.createdAt));
+        const totalDayTracked = dayCounts.reduce((s: number, c: number) => s + c, 0);
+
+        const dayOfWeekDistribution = dayNames.map((day, idx) => ({
+          day,
+          count: dayCounts[idx],
+          pct: totalDayTracked > 0 ? (dayCounts[idx] / totalDayTracked) * 100 : 0
+        }));
+
+        const weekendCount = dayCounts[0] + dayCounts[6];
+        const weekdayCount = dayCounts.slice(1, 6).reduce((s: number, c: number) => s + c, 0);
+        const weekendPct = totalDayTracked > 0 ? (weekendCount / totalDayTracked) * 100 : 0;
+        const weekdayPct = totalDayTracked > 0 ? (weekdayCount / totalDayTracked) * 100 : 0;
+
+        // Card Rarity Breakdown (SSR vs SR)
+        const ssrCards = cards.filter(c => c.rarity === 5);
+        const srCards = cards.filter(c => c.rarity === 4);
+        const ssrReviews = validReviews.filter(r => ssrCards.some(c => c.id === r.cardId));
+        const srReviews = validReviews.filter(r => srCards.some(c => c.id === r.cardId));
+        const ssrRated = ssrReviews.filter(r => r.ratings?.overall);
+        const srRated = srReviews.filter(r => r.ratings?.overall);
+
+        const rarityStats = {
+          ssr: {
+            count: ssrCards.length,
+            reviews: ssrReviews.length,
+            avgRating: ssrRated.length > 0 ? ssrRated.reduce((s, r) => s + r.ratings!.overall, 0) / ssrRated.length : 0
+          },
+          sr: {
+            count: srCards.length,
+            reviews: srReviews.length,
+            avgRating: srRated.length > 0 ? srRated.reduce((s, r) => s + r.ratings!.overall, 0) / srRated.length : 0
+          }
+        };
+
+        // Daily Trends (last 30 days)
+        const getDateKey = (date: Date) => {
+          const y = date.getFullYear();
+          const m = String(date.getMonth() + 1).padStart(2, '0');
+          const d = String(date.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        };
+
+        const dailyStatsMap = new Map<string, { reviews: number; comments: number }>();
+        for (let i = 29; i >= 0; i--) {
+          const d = new Date(today);
+          d.setDate(d.getDate() - i);
+          dailyStatsMap.set(getDateKey(d), { reviews: 0, comments: 0 });
+        }
+
+        validReviews.forEach(r => {
+          if (r.createdAt) {
+            const d = typeof r.createdAt.toDate === 'function' ? r.createdAt.toDate() : new Date(r.createdAt);
+            const key = getDateKey(d);
+            if (dailyStatsMap.has(key)) {
+              dailyStatsMap.get(key)!.reviews++;
+            }
+          }
+        });
+
+        validComments.forEach(c => {
+          if (c.createdAt) {
+            const d = typeof c.createdAt.toDate === 'function' ? c.createdAt.toDate() : new Date(c.createdAt);
+            const key = getDateKey(d);
+            if (dailyStatsMap.has(key)) {
+              dailyStatsMap.get(key)!.comments++;
+            }
+          }
+        });
+
+        const dailyTrends = Array.from(dailyStatsMap.entries()).map(([dateKey, counts]) => {
+          const [, m, d] = dateKey.split('-');
+          return {
+            date: dateKey,
+            displayDate: `${parseInt(m)}/${parseInt(d)}`,
+            reviews: counts.reviews,
+            comments: counts.comments,
+            total: counts.reviews + counts.comments
+          };
+        });
+
+        let peakDay: { date: string; count: number } | null = null;
+        let maxDailyTotal = 0;
+        dailyTrends.forEach(item => {
+          if (item.total > maxDailyTotal) {
+            maxDailyTotal = item.total;
+            peakDay = { date: item.displayDate, count: item.total };
+          }
+        });
+
+        // Character Breakdown with card count & density
+        const charCounts = new Map<string, { count: number; likes: number; ratingSum: number; ratingCount: number; comments: number }>();
+        validReviews.forEach(r => {
+          const card = cards.find(c => c.id === r.cardId);
+          const char = card?.character || '기타';
+          if (!charCounts.has(char)) {
+            charCounts.set(char, { count: 0, likes: 0, ratingSum: 0, ratingCount: 0, comments: 0 });
+          }
+          const entry = charCounts.get(char)!;
+          entry.count++;
+          entry.likes += (r.likes || 0);
+          entry.comments += (r.commentCount || 0);
+          if (r.ratings?.overall) {
+            entry.ratingSum += r.ratings.overall;
+            entry.ratingCount++;
+          }
+        });
+
+        const characterBreakdown = Array.from(charCounts.entries())
+          .map(([character, info]) => {
+            const charCards = cards.filter(c => c.character === character);
+            const cardCount = charCards.length;
+            const density = cardCount > 0 ? (info.count / cardCount) : 0;
+            return {
+              character,
+              reviewCount: info.count,
+              pct: validReviews.length > 0 ? (info.count / validReviews.length) * 100 : 0,
+              totalLikes: info.likes,
+              totalComments: info.comments,
+              avgRating: info.ratingCount > 0 ? (info.ratingSum / info.ratingCount) : 0,
+              cardCount,
+              density
+            };
+          })
+          .sort((a, b) => b.reviewCount - a.reviewCount);
+
         setAdminStats({
           todayReviews,
           totalReviews,
@@ -1021,10 +1343,41 @@ export default function App() {
           bestReviews,
           hotReviews,
           mostLovedCards,
-          characterStats
+          characterStats,
+          portfolio: {
+            totalEngagements,
+            totalLikes,
+            totalComments,
+            uniqueReviewers,
+            repeatReviewers,
+            repeatRate,
+            avgReviewLength,
+            maxReviewLength,
+            longReviewRatio,
+            photoReviewRatio,
+            inDepthRatio,
+            overallAvgRating,
+            avgStoryRating,
+            avgDirectingRating,
+            ratedReviewsCount: ratedReviews.length,
+            positiveRate,
+            engagementMultiplier,
+            ratingDistribution,
+            dailyTrends,
+            peakDay,
+            characterBreakdown,
+            hourlyDistribution,
+            peakHourRange,
+            dayOfWeekDistribution,
+            weekendPct,
+            weekdayPct,
+            lengthSegments,
+            rarityStats
+          }
         });
       };
-      fetchStats();
+      setIsStatsLoading(true);
+      fetchStats().finally(() => setIsStatsLoading(false));
     }
   }, [isAdmin, showStats, cards]);
 
@@ -3533,28 +3886,62 @@ export default function App() {
                   </div>
                   <div>
                     <h2 className="text-2xl font-bold text-gray-900">관리자 패널</h2>
-                    <div className="flex gap-4 mt-2">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-2">
                       <button
-                        onClick={() => setStatsTab('stats')}
-                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'stats' ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                        onClick={() => setStatsTab('reviewStats')}
+                        className={cn(
+                          "text-sm font-bold pb-1 border-b-2 transition-colors cursor-pointer", 
+                          statsTab === 'reviewStats' 
+                            ? "border-indigo-600 text-indigo-600" 
+                            : "border-transparent text-gray-400 hover:text-gray-600"
+                        )}
                       >
-                        방문자 통계
+                        감상평 통계
+                      </button>
+                      <button
+                        onClick={() => setStatsTab('portfolioKpi')}
+                        className={cn(
+                          "text-sm font-bold pb-1 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5", 
+                          statsTab === 'portfolioKpi' 
+                            ? "border-indigo-600 text-indigo-600" 
+                            : "border-transparent text-gray-400 hover:text-gray-600"
+                        )}
+                      >
+                        <span>포폴용 KPI & 데이터 분석</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-bold border border-indigo-200">
+                          HOT
+                        </span>
                       </button>
                       <button
                         onClick={() => setStatsTab('bannedIps')}
-                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'bannedIps' ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                        className={cn(
+                          "text-sm font-bold pb-1 border-b-2 transition-colors cursor-pointer", 
+                          statsTab === 'bannedIps' 
+                            ? "border-indigo-600 text-indigo-600" 
+                            : "border-transparent text-gray-400 hover:text-gray-600"
+                        )}
                       >
                         차단된 IP 관리
                       </button>
                       <button
                         onClick={() => setStatsTab('suggestions')}
-                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'suggestions' ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                        className={cn(
+                          "text-sm font-bold pb-1 border-b-2 transition-colors cursor-pointer", 
+                          statsTab === 'suggestions' 
+                            ? "border-indigo-600 text-indigo-600" 
+                            : "border-transparent text-gray-400 hover:text-gray-600"
+                        )}
                       >
                         건의사항
                       </button>
                       <button
                         onClick={() => setStatsTab('migration')}
-                        className={cn("text-sm font-bold pb-1 border-b-2 transition-colors", statsTab === 'migration' ? "border-rose-600 text-rose-600" : "border-transparent text-gray-400 hover:text-gray-600")}
+                        className={cn(
+                          "text-sm font-bold pb-1 border-b-2 transition-colors cursor-pointer", 
+                          statsTab === 'migration' 
+                            ? "border-rose-600 text-rose-600" 
+                            : "border-transparent text-gray-400 hover:text-gray-600"
+                        )}
                       >
                         데이터 마이그레이션
                       </button>
@@ -3564,36 +3951,36 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => setShowStats(false)}
-                    className="p-3 hover:bg-gray-100 rounded-2xl transition-colors text-gray-400"
+                    className="p-3 hover:bg-gray-100 rounded-2xl transition-colors text-gray-400 cursor-pointer"
                   >
                     <X className="w-6 h-6" />
                   </button>
                 </div>
               </div>
 
-              <div className="p-8 overflow-y-auto custom-scrollbar space-y-8">
-                {statsTab === 'stats' ? (
+              <div className="p-6 sm:p-8 overflow-y-auto custom-scrollbar space-y-8">
+                {statsTab === 'reviewStats' ? (
                   <>
                     {/* Summary Cards */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                      <div className="p-6 rounded-3xl bg-indigo-50 border border-indigo-100 text-center">
+                      <div className="p-6 rounded-3xl bg-indigo-50 border border-indigo-100 text-center shadow-xs">
                         <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">오늘의 신규 감상평 수</p>
                         <p className="text-3xl font-bold text-indigo-900">{adminStats.todayReviews}</p>
                       </div>
-                      <div className="p-6 rounded-3xl bg-blue-50 border border-blue-100 text-center">
+                      <div className="p-6 rounded-3xl bg-blue-50 border border-blue-100 text-center shadow-xs">
                         <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">누적 감상평 수</p>
                         <p className="text-3xl font-bold text-blue-900">{adminStats.totalReviews}</p>
                       </div>
-                      <div className="p-6 rounded-3xl bg-emerald-50 border border-emerald-100 text-center">
+                      <div className="p-6 rounded-3xl bg-emerald-50 border border-emerald-100 text-center shadow-xs">
                         <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1">오늘의 신규 댓글</p>
                         <p className="text-3xl font-bold text-emerald-900">{adminStats.todayComments}</p>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div className="p-6 rounded-3xl bg-amber-50 border border-amber-100">
+                      <div className="p-6 rounded-3xl bg-amber-50 border border-amber-100 shadow-xs">
                         <p className="text-sm font-bold text-amber-500 uppercase tracking-widest mb-3 flex items-center gap-1">
-                          <Heart className="w-3 h-3" /> 베스트 감상평 (Top 5)
+                          <Heart className="w-3.5 h-3.5 fill-amber-400" /> 베스트 감상평 (Top 5)
                         </p>
                         <div className="space-y-3">
                           {adminStats.bestReviews.length > 0 ? adminStats.bestReviews.map((r, i) => (
@@ -3618,9 +4005,10 @@ export default function App() {
                           )) : <p className="text-sm text-amber-400">데이터 없음</p>}
                         </div>
                       </div>
-                      <div className="p-6 rounded-3xl bg-rose-50 border border-rose-100">
+
+                      <div className="p-6 rounded-3xl bg-rose-50 border border-rose-100 shadow-xs">
                         <p className="text-sm font-bold text-rose-500 uppercase tracking-widest mb-3 flex items-center gap-1">
-                          <MessageCircle className="w-3 h-3" /> HOT 감상평 (Top 5)
+                          <MessageCircle className="w-3.5 h-3.5" /> HOT 감상평 (Top 5)
                         </p>
                         <div className="space-y-3">
                           {adminStats.hotReviews.length > 0 ? adminStats.hotReviews.map((r, i) => (
@@ -3645,9 +4033,10 @@ export default function App() {
                           )) : <p className="text-sm text-rose-400">데이터 없음</p>}
                         </div>
                       </div>
-                      <div className="p-6 rounded-3xl bg-purple-50 border border-purple-100">
+
+                      <div className="p-6 rounded-3xl bg-purple-50 border border-purple-100 shadow-xs">
                         <p className="text-sm font-bold text-purple-500 uppercase tracking-widest mb-3 flex items-center gap-1">
-                          <Star className="w-3 h-3" /> 가장 사랑받는 카드 (Top 5)
+                          <Star className="w-3.5 h-3.5 fill-purple-400 text-purple-400" /> 가장 사랑받는 카드 (Top 5)
                         </p>
                         <div className="space-y-3">
                           {adminStats.mostLovedCards.length > 0 ? adminStats.mostLovedCards.map((c, i) => (
@@ -3664,7 +4053,7 @@ export default function App() {
                               >
                                 {cards.find(card => card.id === c.cardId)?.character} | {c.name}
                               </span>
-                              <div className="flex items-center gap-1 bg-white/60 px-2 py-1 rounded-full border border-purple-100/50 shrink-0">
+                              <div className="flex items-center gap-1 bg-white/70 px-2 py-0.5 rounded-full border border-purple-100 shrink-0">
                                 <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
                                 <span className="text-purple-700 font-bold">{c.avg.toFixed(1)}</span>
                               </div>
@@ -3676,17 +4065,17 @@ export default function App() {
 
                     {adminStats.characterStats.length > 0 && (
                       <div className="space-y-4">
-                        <h3 className="text-lg font-bold text-gray-800 px-2">캐릭터별 지표</h3>
+                        <h3 className="text-lg font-bold text-gray-800 px-1">캐릭터별 감상평 상세 지표</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {adminStats.characterStats.map((charStat, idx) => (
-                            <div key={idx} className="p-6 rounded-3xl bg-gray-50 border border-gray-100 space-y-5">
+                            <div key={idx} className="p-6 rounded-3xl bg-gray-50 border border-gray-100 space-y-5 shadow-xs">
                               <h4 className="font-bold text-gray-900 text-lg border-b border-gray-200 pb-2">{charStat.character}</h4>
                               
                               <div>
-                                <p className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-2">자주 등장하는 단어 TOP 10</p>
+                                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">자주 등장하는 단어 TOP 10</p>
                                 <div className="flex flex-wrap gap-1.5">
                                   {charStat.topWords.length > 0 ? charStat.topWords.map((word, i) => (
-                                    <span key={i} className="px-2 py-0.5 bg-white border border-gray-200 rounded-md text-sm font-bold text-gray-600">
+                                    <span key={i} className="px-2.5 py-1 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700">
                                       #{word}
                                     </span>
                                   )) : <span className="text-sm text-gray-400">데이터 없음</span>}
@@ -3695,12 +4084,12 @@ export default function App() {
 
                               <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                  <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2">평균 평점 순 인기 카드</p>
-                                  <ul className="space-y-1">
+                                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">평균 평점 순 인기 카드</p>
+                                  <ul className="space-y-1.5 text-xs">
                                     {charStat.topRatedCards.map((card, i) => (
-                                      <li key={i} className="text-base font-medium text-gray-700 truncate">
+                                      <li key={i} className="font-medium text-gray-700 truncate">
                                         {i + 1}. <span 
-                                          className="cursor-pointer hover:underline"
+                                          className="cursor-pointer hover:underline text-gray-900"
                                           onClick={() => {
                                             const c = cards.find(c => c.id === card.cardId);
                                             if (c) {
@@ -3714,12 +4103,12 @@ export default function App() {
                                   </ul>
                                 </div>
                                 <div>
-                                  <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2">감상평 개수 순 인기 카드</p>
-                                  <ul className="space-y-1">
+                                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">감상평 개수 순 인기 카드</p>
+                                  <ul className="space-y-1.5 text-xs">
                                     {charStat.topReviewedCards.map((card, i) => (
-                                      <li key={i} className="text-base font-medium text-gray-700 truncate">
+                                      <li key={i} className="font-medium text-gray-700 truncate">
                                         {i + 1}. <span 
-                                          className="cursor-pointer hover:underline"
+                                          className="cursor-pointer hover:underline text-gray-900"
                                           onClick={() => {
                                             const c = cards.find(c => c.id === card.cardId);
                                             if (c) {
@@ -3734,10 +4123,10 @@ export default function App() {
                                 </div>
                               </div>
 
-                              <div className="pt-2 border-t border-gray-100">
-                                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-1">가장 높은 좋아요의 감상평이 있는 카드</p>
-                                <p 
-                                  className="text-base font-bold text-indigo-600 cursor-pointer hover:underline"
+                              <div className="pt-2 border-t border-gray-200 flex items-center justify-between text-xs">
+                                <span className="font-bold text-gray-400">최다 좋아요 감상평 카드</span>
+                                <span 
+                                  className="font-bold text-indigo-600 cursor-pointer hover:underline truncate max-w-[200px]"
                                   onClick={() => {
                                     if (charStat.highestLikedCard) {
                                       const c = cards.find(c => c.id === charStat.highestLikedCard?.cardId);
@@ -3749,7 +4138,7 @@ export default function App() {
                                   }}
                                 >
                                   {charStat.highestLikedCard ? charStat.highestLikedCard.name : '-'}
-                                </p>
+                                </span>
                               </div>
                             </div>
                           ))}
@@ -3757,6 +4146,651 @@ export default function App() {
                       </div>
                     )}
                   </>
+                ) : statsTab === 'portfolioKpi' ? (
+                  /* ========================================================= */
+                  /*  포폴용 KPI & 커뮤니티 데이터 분석 탭 (Clean White Theme)  */
+                  /* ========================================================= */
+                  <div className="space-y-7">
+                    {/* 상단 헤더 & 원클릭 복사 배너 */}
+                    <div className="p-6 sm:p-7 rounded-3xl bg-white border border-gray-200 shadow-xs space-y-6">
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-gray-100 pb-5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shadow-2xs">
+                            <Trophy className="w-5 h-5 text-indigo-600" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-lg font-bold text-gray-900 tracking-tight">포트폴리오 핵심 성과 지표 & 데이터 분석</h3>
+                              <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[11px] font-bold border border-indigo-200">
+                                Portfolio & Analytics
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              실제 사용자 활동 로그에서 집계된 데이터로, 기획·운영·PM 포트폴리오 및 사용자 행동 분석에 즉시 활용할 수 있습니다.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* 포트폴리오 요약 복사 버튼 */}
+                        <button
+                          onClick={() => {
+                            const p = adminStats.portfolio;
+                            const topChars = p.characterBreakdown.slice(0, 3).map(c => `${c.character}(${c.pct.toFixed(1)}%)`).join(', ');
+                            const text = `[러브앤딥스페이스 아카이브 커뮤니티 데이터 분석 & 성과 요약]
+1. 누적 상호작용(Total Engagements): 총 ${p.totalEngagements.toLocaleString()}건 달성 (감상평 ${adminStats.totalReviews}건, 댓글 ${p.totalComments}건, 공감 ${p.totalLikes}건 / 감상평 1건당 평균 반응 ${p.engagementMultiplier.toFixed(1)}회)
+2. 유저 리텐션 및 재기여율: ${p.repeatRate.toFixed(1)}% (고유 참여자 ${p.uniqueReviewers}명 중 ${p.repeatReviewers}명이 2회 이상 재방문 및 반복 작성, 1인당 평균 ${(p.uniqueReviewers > 0 ? (adminStats.totalReviews / p.uniqueReviewers).toFixed(1) : '0')}건 기여)
+3. 진성 유저 & 고관여 콘텐츠율: ${p.inDepthRatio.toFixed(1)}% 달성 (평균 글자 수 ${p.avgReviewLength}자, 장문(100자+) 비율 ${p.longReviewRatio.toFixed(1)}%, 최장 리뷰 ${p.maxReviewLength}자 기록, 사진 인증률 ${p.photoReviewRatio.toFixed(1)}%)
+4. 다차원 팬덤 만족도: 종합 ★ ${p.overallAvgRating.toFixed(2)} / 5.0 (스토리 ${p.avgStoryRating.toFixed(1)}점, 연출 ${p.avgDirectingRating.toFixed(1)}점, 긍정 평가율 ${p.positiveRate.toFixed(1)}%)
+5. 사용자 행동 패턴 분석: 최다 활동 피크 시간대 [${p.peakHourRange}], 주말 활동 비중 ${p.weekendPct.toFixed(1)}% (평일 ${p.weekdayPct.toFixed(1)}%), 최고 활동일 ${p.peakDay ? `${p.peakDay.date} (${p.peakDay.count}건)` : '집계 중'}
+6. 트래픽 활성화 캐릭터: ${topChars || '전체'}`;
+
+                            navigator.clipboard.writeText(text);
+                            setCopiedPortfolioSummary(true);
+                            setTimeout(() => setCopiedPortfolioSummary(false), 2500);
+                          }}
+                          className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-50 hover:bg-gray-100 active:scale-95 transition-all text-xs font-bold border border-gray-200 cursor-pointer text-gray-700 hover:text-gray-900 shadow-2xs"
+                        >
+                          {copiedPortfolioSummary ? (
+                            <>
+                              <Check className="w-4 h-4 text-emerald-600" />
+                              <span className="text-emerald-700 font-bold">포폴 요약문 복사됨!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-4 h-4 text-indigo-600" />
+                              <span>포폴용 성과 문구 복사</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* 4 Cards (Clean White Base) */}
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                        {/* 1. Total Engagements */}
+                        <div className="p-4 sm:p-5 rounded-2xl bg-white border border-amber-200/80 hover:border-amber-300 transition-all shadow-xs flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold text-gray-500">총 누적 상호작용</span>
+                              <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center text-amber-500">
+                                <Flame className="w-4 h-4" />
+                              </div>
+                            </div>
+                            <p className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                              {adminStats.portfolio.totalEngagements.toLocaleString()}
+                              <span className="text-sm font-bold text-amber-600 ml-1">회</span>
+                            </p>
+                            <p className="text-[11px] text-gray-500 mt-1 truncate">
+                              리뷰 {adminStats.totalReviews} · 댓글 {adminStats.portfolio.totalComments} · 공감 {adminStats.portfolio.totalLikes}
+                            </p>
+                          </div>
+                          <div className="mt-3 pt-2.5 border-t border-gray-100 flex items-center gap-1 text-[11px] text-amber-700 font-bold">
+                            <Sparkles className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                            <span>1건당 반응 {adminStats.portfolio.engagementMultiplier.toFixed(1)}회 (인터랙션 승수)</span>
+                          </div>
+                        </div>
+
+                        {/* 2. User Retention / Repeat Rate */}
+                        <div className="p-4 sm:p-5 rounded-2xl bg-white border border-emerald-200/80 hover:border-emerald-300 transition-all shadow-xs flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold text-gray-500">유저 재방문 참여율</span>
+                              <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+                                <Users className="w-4 h-4" />
+                              </div>
+                            </div>
+                            <p className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                              {adminStats.portfolio.repeatRate.toFixed(1)}
+                              <span className="text-sm font-bold text-emerald-600 ml-1">%</span>
+                            </p>
+                            <p className="text-[11px] text-gray-500 mt-1 truncate">
+                              {adminStats.portfolio.uniqueReviewers}명 중 {adminStats.portfolio.repeatReviewers}명 다회 작성
+                            </p>
+                          </div>
+                          <div className="mt-3 pt-2.5 border-t border-gray-100 flex items-center gap-1 text-[11px] text-emerald-700 font-bold">
+                            <TrendingUp className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                            <span>1인당 평균 {(adminStats.portfolio.uniqueReviewers > 0 ? (adminStats.totalReviews / adminStats.portfolio.uniqueReviewers).toFixed(1) : '0')}건 기여 (유저 락인)</span>
+                          </div>
+                        </div>
+
+                        {/* 3. High Engagement / Quality Content */}
+                        <div className="p-4 sm:p-5 rounded-2xl bg-white border border-sky-200/80 hover:border-sky-300 transition-all shadow-xs flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold text-gray-500">고관여 정성 콘텐츠율</span>
+                              <div className="w-7 h-7 rounded-lg bg-sky-50 flex items-center justify-center text-sky-600">
+                                <Award className="w-4 h-4" />
+                              </div>
+                            </div>
+                            <p className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                              {adminStats.portfolio.inDepthRatio.toFixed(1)}
+                              <span className="text-sm font-bold text-sky-600 ml-1">%</span>
+                            </p>
+                            <p className="text-[11px] text-gray-500 mt-1 truncate">
+                              평균 {adminStats.portfolio.avgReviewLength}자 · 사진인증 {adminStats.portfolio.photoReviewRatio.toFixed(1)}%
+                            </p>
+                          </div>
+                          <div className="mt-3 pt-2.5 border-t border-gray-100 flex items-center gap-1 text-[11px] text-sky-700 font-bold">
+                            <FileText className="w-3.5 h-3.5 shrink-0 text-sky-600" />
+                            <span>장문(100자+) 비율 {adminStats.portfolio.longReviewRatio.toFixed(1)}% (진성 유저)</span>
+                          </div>
+                        </div>
+
+                        {/* 4. Satisfaction / Rating */}
+                        <div className="p-4 sm:p-5 rounded-2xl bg-white border border-purple-200/80 hover:border-purple-300 transition-all shadow-xs flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold text-gray-500">종합 팬덤 만족도</span>
+                              <div className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center text-purple-600">
+                                <Star className="w-4 h-4 text-amber-500 fill-amber-400" />
+                              </div>
+                            </div>
+                            <p className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                              {adminStats.portfolio.overallAvgRating.toFixed(2)}
+                              <span className="text-sm font-bold text-purple-600 ml-1">/ 5.0</span>
+                            </p>
+                            <p className="text-[11px] text-gray-500 mt-1 truncate">
+                              긍정 평가(4~5점) {adminStats.portfolio.positiveRate.toFixed(1)}%
+                            </p>
+                          </div>
+                          <div className="mt-3 pt-2.5 border-t border-gray-100 flex items-center gap-1 text-[11px] text-purple-700 font-bold">
+                            <Heart className="w-3.5 h-3.5 shrink-0 text-rose-500 fill-rose-400" />
+                            <span>스토리 {adminStats.portfolio.avgStoryRating.toFixed(1)}점 · 연출 {adminStats.portfolio.avgDirectingRating.toFixed(1)}점</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* --- 일별 활동량 추이 그래프 (Activity Growth Timeline) --- */}
+                    <div className="p-6 sm:p-7 rounded-3xl bg-white border border-gray-200 shadow-xs space-y-5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                              <TrendingUp className="w-5 h-5 text-indigo-600" />
+                              일별 활동량 추이 그래프
+                            </h3>
+                            {adminStats.portfolio.peakDay && (
+                              <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold flex items-center gap-1">
+                                <Flame className="w-3 h-3 text-amber-500" />
+                                피크: {adminStats.portfolio.peakDay.date} ({adminStats.portfolio.peakDay.count}건)
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            특정 이벤트, 업데이트 전후의 활동량 스파이크를 입증할 수 있는 일별 시계열 차트입니다.
+                          </p>
+                        </div>
+
+                        {/* 기간 토글 버튼 */}
+                        <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl self-start sm:self-auto text-xs font-bold">
+                          {([7, 14, 30] as const).map(days => (
+                            <button
+                              key={days}
+                              onClick={() => setStatsTrendDays(days)}
+                              className={cn(
+                                "px-3 py-1.5 rounded-lg transition-all cursor-pointer",
+                                statsTrendDays === days
+                                  ? "bg-white text-indigo-600 shadow-xs font-black"
+                                  : "text-gray-500 hover:text-gray-900"
+                              )}
+                            >
+                              최근 {days}일
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Interactive Bar Chart */}
+                      {(() => {
+                        const visibleTrends = adminStats.portfolio.dailyTrends.slice(-statsTrendDays);
+                        const maxVal = Math.max(...visibleTrends.map(t => t.total), 1);
+                        
+                        return (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between text-xs px-1">
+                              <div className="flex items-center gap-3">
+                                <span className="flex items-center gap-1.5 text-gray-600 font-medium">
+                                  <span className="w-3 h-3 rounded-sm bg-indigo-600 inline-block" />
+                                  감상평
+                                </span>
+                                <span className="flex items-center gap-1.5 text-gray-600 font-medium">
+                                  <span className="w-3 h-3 rounded-sm bg-emerald-500 inline-block" />
+                                  댓글
+                                </span>
+                              </div>
+                              {hoveredTrendDay ? (
+                                <div className="text-xs font-bold text-indigo-900 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 animate-in fade-in">
+                                  📅 {hoveredTrendDay.displayDate}: 총 {hoveredTrendDay.total}건 (리뷰 {hoveredTrendDay.reviews} · 댓글 {hoveredTrendDay.comments})
+                                </div>
+                              ) : (
+                                <span className="text-gray-400 text-[11px]">막대에 마우스를 올리면 상세 수치가 표시됩니다</span>
+                              )}
+                            </div>
+
+                            <div className="h-44 sm:h-52 w-full pt-6 pb-2 px-2 bg-gray-50/70 rounded-2xl border border-gray-100 flex items-end gap-1 sm:gap-2 overflow-x-auto">
+                              {visibleTrends.map((item, idx) => {
+                                const totalHeightPct = Math.max((item.total / maxVal) * 100, item.total > 0 ? 8 : 2);
+                                const reviewHeightPct = item.total > 0 ? (item.reviews / item.total) * 100 : 0;
+                                const isPeak = adminStats.portfolio.peakDay?.date === item.displayDate;
+
+                                return (
+                                  <div 
+                                    key={idx} 
+                                    className="flex-1 flex flex-col items-center h-full justify-end group min-w-[22px] relative cursor-pointer"
+                                    onMouseEnter={() => setHoveredTrendDay(item)}
+                                    onMouseLeave={() => setHoveredTrendDay(null)}
+                                  >
+                                    {item.total > 0 && (
+                                      <span className={cn(
+                                        "text-[10px] font-bold mb-1 transition-transform group-hover:scale-110",
+                                        isPeak ? "text-amber-600 font-black" : "text-gray-600"
+                                      )}>
+                                        {item.total}
+                                      </span>
+                                    )}
+
+                                    <div 
+                                      className={cn(
+                                        "w-full rounded-t-lg overflow-hidden flex flex-col justify-end transition-all duration-300 group-hover:opacity-90 group-hover:shadow-md",
+                                        item.total === 0 ? "bg-gray-200/60" : isPeak ? "ring-2 ring-amber-400" : ""
+                                      )}
+                                      style={{ height: `${totalHeightPct}%` }}
+                                    >
+                                      {item.comments > 0 && (
+                                        <div 
+                                          className="w-full bg-emerald-500 transition-all"
+                                          style={{ height: `${100 - reviewHeightPct}%` }}
+                                        />
+                                      )}
+                                      {item.reviews > 0 && (
+                                        <div 
+                                          className="w-full bg-indigo-600 transition-all"
+                                          style={{ height: `${reviewHeightPct}%` }}
+                                        />
+                                      )}
+                                    </div>
+
+                                    <span className={cn(
+                                      "text-[10px] mt-2 truncate w-full text-center",
+                                      isPeak ? "text-amber-600 font-black" : "text-gray-400 group-hover:text-gray-900"
+                                    )}>
+                                      {item.displayDate}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            <p className="text-[11px] text-gray-500 italic px-1">
+                              💡 포폴 작성 팁: "신규 카드 출시 당일 일일 최대 상호작용 {maxVal}건을 달성하며 커뮤니티 트래픽을 견인했습니다"와 같이 일자별 스파이크를 서술하세요.
+                            </p>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* --- 심층 분석 섹션 1: 24시간 활동 분포 & 요일별 활동 패턴 (2-Column) --- */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* 1. 시간대별 활동량 분포 (24-Hour Timeline) */}
+                      <div className="p-6 rounded-3xl bg-white border border-gray-200 shadow-xs space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-indigo-600" />
+                            <h3 className="text-sm font-bold text-gray-900">시간대별 활동량 분포 (24시간)</h3>
+                          </div>
+                          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100">
+                            골든 타임 분석
+                          </span>
+                        </div>
+
+                        {/* Peak callout badge */}
+                        <div className="p-3 bg-indigo-50/60 rounded-xl border border-indigo-100 flex items-center justify-between text-xs">
+                          <span className="text-gray-600 font-medium">최다 활동 피크 시간대:</span>
+                          <span className="font-extrabold text-indigo-900 flex items-center gap-1">
+                            <Flame className="w-3.5 h-3.5 text-amber-500" />
+                            {adminStats.portfolio.peakHourRange}
+                          </span>
+                        </div>
+
+                        {/* Hourly Bars */}
+                        {(() => {
+                          const maxHourVal = Math.max(...adminStats.portfolio.hourlyDistribution.map(h => h.count), 1);
+                          return (
+                            <div className="space-y-2">
+                              <div className="h-28 flex items-end gap-1 pt-4 pb-1 px-1 bg-gray-50/80 rounded-xl border border-gray-100">
+                                {adminStats.portfolio.hourlyDistribution.map((item) => {
+                                  const heightPct = Math.max((item.count / maxHourVal) * 100, item.count > 0 ? 10 : 3);
+                                  const isPeak = item.count === maxHourVal && item.count > 0;
+                                  return (
+                                    <div 
+                                      key={item.hour} 
+                                      className="flex-1 flex flex-col items-center justify-end h-full group relative"
+                                      title={`${item.hour}시: ${item.count}건 (${item.pct.toFixed(1)}%)`}
+                                    >
+                                      <div 
+                                        className={cn(
+                                          "w-full rounded-t-sm transition-all",
+                                          isPeak ? "bg-amber-500" : item.count > 0 ? "bg-indigo-500 group-hover:bg-indigo-600" : "bg-gray-200"
+                                        )}
+                                        style={{ height: `${heightPct}%` }}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex justify-between text-[10px] text-gray-400 px-1 font-medium">
+                                <span>00시 (자정)</span>
+                                <span>06시</span>
+                                <span>12시 (정오)</span>
+                                <span>18시</span>
+                                <span>23시</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        <p className="text-[11px] text-gray-500 leading-relaxed">
+                          📌 운영 인사이트: 유저 참여가 가장 집중되는 피크 시간대에 공지사항 배포 및 콘텐츠를 업데이트하면 도달률과 감상평 생성 속도를 극대화할 수 있습니다.
+                        </p>
+                      </div>
+
+                      {/* 2. 요일별 활동 패턴 (Day of Week) */}
+                      <div className="p-6 rounded-3xl bg-white border border-gray-200 shadow-xs space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Activity className="w-4 h-4 text-emerald-600" />
+                            <h3 className="text-sm font-bold text-gray-900">요일별 활동 패턴 (일~토)</h3>
+                          </div>
+                          <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-100">
+                            주말 vs 평일
+                          </span>
+                        </div>
+
+                        {/* Weekend vs Weekday Summary */}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="p-3 bg-purple-50/60 rounded-xl border border-purple-100 text-center">
+                            <p className="text-gray-500 font-medium">주말(토/일) 비중</p>
+                            <p className="text-base font-extrabold text-purple-900 mt-0.5">
+                              {adminStats.portfolio.weekendPct.toFixed(1)}%
+                            </p>
+                          </div>
+                          <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 text-center">
+                            <p className="text-gray-500 font-medium">평일(월~금) 비중</p>
+                            <p className="text-base font-extrabold text-blue-900 mt-0.5">
+                              {adminStats.portfolio.weekdayPct.toFixed(1)}%
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Day of week horizontal bars */}
+                        <div className="space-y-2 pt-1">
+                          {adminStats.portfolio.dayOfWeekDistribution.map((item) => (
+                            <div key={item.day} className="flex items-center gap-2 text-xs">
+                              <span className={cn(
+                                "w-6 font-bold text-center",
+                                item.day === '일' ? 'text-rose-500' : item.day === '토' ? 'text-blue-500' : 'text-gray-600'
+                              )}>
+                                {item.day}
+                              </span>
+                              <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden">
+                                <div 
+                                  className={cn(
+                                    "h-full rounded-full transition-all duration-500",
+                                    item.day === '일' || item.day === '토' ? 'bg-purple-500' : 'bg-emerald-500'
+                                  )}
+                                  style={{ width: `${item.pct}%` }}
+                                />
+                              </div>
+                              <span className="w-20 text-right font-medium text-gray-500 text-[11px] shrink-0">
+                                {item.count}건 ({item.pct.toFixed(1)}%)
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+
+                        <p className="text-[11px] text-gray-500 leading-relaxed">
+                          📌 패턴 분석: 주말 몰입형 참여와 주중 데일리 참여 비율을 분석하여 정기 점검 시간 및 이벤트 일정을 최적화할 수 있습니다.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* --- 심층 분석 섹션 2: 세부 평가 축 & 별점 만족도 / 텍스트 길이 & 카드 등급 (2-Column) --- */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* 1. 세부 평가 3대 축 비교 & 별점 만족도 분포도 */}
+                      <div className="p-6 rounded-3xl bg-white border border-gray-200 shadow-xs space-y-5">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                            <Star className="w-4 h-4 text-amber-500 fill-amber-400" />
+                            세부 평가 3대 축 & 별점 만족도 분포
+                          </h3>
+                          <span className="text-xs text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+                            긍정률 {adminStats.portfolio.positiveRate.toFixed(1)}%
+                          </span>
+                        </div>
+
+                        {/* 3대 축 비교 바 (스토리 vs 연출 vs 종합) */}
+                        <div className="p-4 bg-gray-50/80 rounded-2xl border border-gray-100 space-y-3">
+                          <p className="text-xs font-bold text-gray-600">평가 영역별 평균 점수 (5.0 만점)</p>
+                          <div className="space-y-2 text-xs">
+                            <div>
+                              <div className="flex justify-between font-medium text-gray-700 mb-1">
+                                <span>📖 스토리 & 서사 몰입도</span>
+                                <span className="font-bold text-indigo-600">{adminStats.portfolio.avgStoryRating.toFixed(2)}점</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-indigo-500 rounded-full"
+                                  style={{ width: `${(adminStats.portfolio.avgStoryRating / 5) * 100}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="flex justify-between font-medium text-gray-700 mb-1">
+                                <span>🎬 연출 & 일러스트 비주얼</span>
+                                <span className="font-bold text-purple-600">{adminStats.portfolio.avgDirectingRating.toFixed(2)}점</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-purple-500 rounded-full"
+                                  style={{ width: `${(adminStats.portfolio.avgDirectingRating / 5) * 100}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="flex justify-between font-medium text-gray-700 mb-1">
+                                <span>⭐ 전반적 종합 만족도</span>
+                                <span className="font-bold text-amber-600">{adminStats.portfolio.overallAvgRating.toFixed(2)}점</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-amber-500 rounded-full"
+                                  style={{ width: `${(adminStats.portfolio.overallAvgRating / 5) * 100}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Star Rating Distribution (Round percentages cleanly to toFixed(1) with robust width) */}
+                        <div className="space-y-2.5">
+                          <p className="text-xs font-bold text-gray-500">별점 구간별 분포 ({adminStats.portfolio.ratedReviewsCount}건 평가 기준)</p>
+                          {adminStats.portfolio.ratingDistribution.map((item) => (
+                            <div key={item.star} className="flex items-center gap-3 text-xs">
+                              <span className="w-9 font-bold text-gray-700 flex items-center gap-0.5 shrink-0">
+                                {item.star} <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                              </span>
+                              <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden">
+                                <div 
+                                  className={cn(
+                                    "h-full rounded-full transition-all duration-500",
+                                    item.star >= 4 ? "bg-amber-400" : item.star === 3 ? "bg-blue-400" : "bg-gray-400"
+                                  )}
+                                  style={{ width: `${item.pct}%` }}
+                                />
+                              </div>
+                              <span className="w-20 text-right font-medium text-gray-600 shrink-0 text-[11px]">
+                                {item.count}건 ({item.pct.toFixed(1)}%)
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 2. 글자 수 구간별 분포 & 카드 등급별 반응도 */}
+                      <div className="p-6 rounded-3xl bg-white border border-gray-200 shadow-xs space-y-5">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-sky-600" />
+                            감상평 깊이 세분화 & 카드 등급별 반응
+                          </h3>
+                          <span className="text-xs text-sky-700 font-bold bg-sky-50 px-2 py-0.5 rounded-md border border-sky-100">
+                            최대 {adminStats.portfolio.maxReviewLength}자 작성
+                          </span>
+                        </div>
+
+                        {/* Review Length Distribution */}
+                        <div className="space-y-3">
+                          <p className="text-xs font-bold text-gray-600">감상평 텍스트 분량별 유저 세그먼트</p>
+                          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                            <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                              <p className="text-[10px] font-bold text-gray-400 uppercase">단문 (&lt;30자)</p>
+                              <p className="text-sm font-extrabold text-gray-800 mt-0.5">
+                                {adminStats.portfolio.lengthSegments.short.count}건
+                              </p>
+                              <p className="text-[10px] text-gray-500">
+                                {adminStats.portfolio.lengthSegments.short.pct.toFixed(1)}%
+                              </p>
+                            </div>
+                            <div className="p-3 bg-sky-50/60 rounded-xl border border-sky-100">
+                              <p className="text-[10px] font-bold text-sky-600 uppercase">중문 (30~99자)</p>
+                              <p className="text-sm font-extrabold text-sky-900 mt-0.5">
+                                {adminStats.portfolio.lengthSegments.medium.count}건
+                              </p>
+                              <p className="text-[10px] text-sky-700">
+                                {adminStats.portfolio.lengthSegments.medium.pct.toFixed(1)}%
+                              </p>
+                            </div>
+                            <div className="p-3 bg-indigo-50/60 rounded-xl border border-indigo-100">
+                              <p className="text-[10px] font-bold text-indigo-600 uppercase">장문 (100자+)</p>
+                              <p className="text-sm font-extrabold text-indigo-900 mt-0.5">
+                                {adminStats.portfolio.lengthSegments.long.count}건
+                              </p>
+                              <p className="text-[10px] text-indigo-700">
+                                {adminStats.portfolio.lengthSegments.long.pct.toFixed(1)}%
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Card Rarity Performance (SSR vs SR) */}
+                        <div className="pt-2 border-t border-gray-100 space-y-3">
+                          <p className="text-xs font-bold text-gray-600">카드 등급별 감상평 반응도</p>
+                          <div className="grid grid-cols-2 gap-3 text-xs">
+                            <div className="p-3.5 rounded-xl bg-amber-50/50 border border-amber-200">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-bold text-amber-900">SSR (5성 카드)</span>
+                                <span className="text-[10px] font-bold text-amber-700">{adminStats.portfolio.rarityStats.ssr.count}종 보유</span>
+                              </div>
+                              <p className="text-lg font-black text-amber-900">
+                                {adminStats.portfolio.rarityStats.ssr.reviews}
+                                <span className="text-xs font-normal text-amber-700 ml-1">건 작성</span>
+                              </p>
+                              <p className="text-[11px] text-amber-700 mt-0.5 flex items-center gap-1 font-medium">
+                                <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                                평균 평점: {adminStats.portfolio.rarityStats.ssr.avgRating.toFixed(2)}점
+                              </p>
+                            </div>
+
+                            <div className="p-3.5 rounded-xl bg-purple-50/50 border border-purple-200">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-bold text-purple-900">SR (4성 카드)</span>
+                                <span className="text-[10px] font-bold text-purple-700">{adminStats.portfolio.rarityStats.sr.count}종 보유</span>
+                              </div>
+                              <p className="text-lg font-black text-purple-900">
+                                {adminStats.portfolio.rarityStats.sr.reviews}
+                                <span className="text-xs font-normal text-purple-700 ml-1">건 작성</span>
+                              </p>
+                              <p className="text-[11px] text-purple-700 mt-0.5 flex items-center gap-1 font-medium">
+                                <Star className="w-3 h-3 fill-purple-400 text-purple-400" />
+                                평균 평점: {adminStats.portfolio.rarityStats.sr.avgRating.toFixed(2)}점
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <p className="text-[11px] text-gray-500 leading-relaxed">
+                          📌 분석 인사이트: 장문 심층 후기 비율이 {adminStats.portfolio.longReviewRatio.toFixed(1)}%로 매우 높아, 커뮤니티가 단순 평점 집계가 아닌 팬덤의 서사 토론장으로 기능하고 있음을 증명합니다.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* --- 심층 분석 섹션 3: 캐릭터별 심층 성과 비교 매트릭스 (Full-Width Table) --- */}
+                    <div className="p-6 rounded-3xl bg-white border border-gray-200 shadow-xs space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Users className="w-5 h-5 text-purple-600" />
+                          <h3 className="text-base font-bold text-gray-900">캐릭터별 심층 성과 비교 매트릭스</h3>
+                        </div>
+                        <span className="text-xs text-gray-500">
+                          카드당 리뷰 밀도 = 총 리뷰 수 / 캐릭터 카드 수
+                        </span>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-gray-50 border-b border-gray-200 text-gray-600">
+                            <tr>
+                              <th className="px-4 py-3 font-bold rounded-l-xl">캐릭터</th>
+                              <th className="px-4 py-3 font-bold text-center">보유 카드</th>
+                              <th className="px-4 py-3 font-bold text-center">감상평 수 (점유율)</th>
+                              <th className="px-4 py-3 font-bold text-center">카드당 리뷰 밀도</th>
+                              <th className="px-4 py-3 font-bold text-center">공감 & 댓글</th>
+                              <th className="px-4 py-3 font-bold text-center">평균 평점</th>
+                              <th className="px-4 py-3 font-bold rounded-r-xl">점유율 시각화</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {adminStats.portfolio.characterBreakdown.map((item, idx) => (
+                              <tr key={idx} className="hover:bg-gray-50/80 transition-colors">
+                                <td className="px-4 py-3.5 font-bold text-gray-900">
+                                  {item.character}
+                                </td>
+                                <td className="px-4 py-3.5 text-center text-gray-600 font-medium">
+                                  {item.cardCount}장
+                                </td>
+                                <td className="px-4 py-3.5 text-center font-bold text-indigo-900">
+                                  {item.reviewCount}건 ({item.pct.toFixed(1)}%)
+                                </td>
+                                <td className="px-4 py-3.5 text-center font-bold text-emerald-700">
+                                  {item.density.toFixed(1)}건 / 장
+                                </td>
+                                <td className="px-4 py-3.5 text-center text-gray-600">
+                                  공감 {item.totalLikes} · 댓글 {item.totalComments}
+                                </td>
+                                <td className="px-4 py-3.5 text-center font-bold text-amber-600">
+                                  ★ {item.avgRating.toFixed(2)}
+                                </td>
+                                <td className="px-4 py-3.5 w-36">
+                                  <div className="w-full h-2 rounded-full bg-gray-100 overflow-hidden">
+                                    <div 
+                                      className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500"
+                                      style={{ width: `${item.pct}%` }}
+                                    />
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <p className="text-[11px] text-gray-400 italic pt-1">
+                        💡 해석 가이드: '카드당 리뷰 밀도'가 높은 캐릭터일수록 유저 1명이 카드를 감상한 후 리뷰를 남기는 전환율(Conversion Rate)이 높은 팬덤입니다.
+                      </p>
+                    </div>
+                  </div>
                 ) : statsTab === 'bannedIps' ? (
                   <div className="space-y-4">
                     <h3 className="text-lg font-bold text-gray-800 px-2">차단된 IP 목록 ({bannedIps.length})</h3>
